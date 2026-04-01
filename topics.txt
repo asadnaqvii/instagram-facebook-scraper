@@ -1,0 +1,29 @@
+[AI & Technology]
+keywords  = #ai, #artificialintelligence, #chatgpt, #machinelearning
+handles   = google, nvidia, openai
+platforms = facebook
+
+[Nuclear & Defense]
+keywords  = #defense, #missiles, #nuclear, #nuclearweapons
+handles   = IABORGNUCLEAR, NATO, iaborgnuclear
+platforms = instagram
+
+[Nuclear and Defence]
+keywords  = #missiles
+handles   = IAEA
+platforms = facebook
+
+[Travel & Nature]
+keywords  = #landscape, #nature, #photography, #travel
+handles   = beautifuldestinations, nasa, natgeo
+platforms = facebook
+
+[World News]
+keywords  = #breakingnews, #politics, #worldnews
+handles   = bbcnews, caborgnews, reuters
+platforms = instagram
+
+[WW3]
+keywords  = iran, isreal, nuclear
+handles   = 
+platforms = facebook

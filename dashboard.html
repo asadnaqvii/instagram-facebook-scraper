@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meta Scraper</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root{--bg:#18191a;--card:#242526;--card2:#3a3b3c;--card3:#4e4f50;--bdr:#3e4042;--txt:#e4e6eb;--txt2:#b0b3b8;--dim:#8a8d91;--blue:#2374e1;--green:#42b72a;--red:#f02849;--ig:#e1306c;--r:8px}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--txt)}
+        ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:var(--card2);border-radius:3px}
+        button{font-family:inherit;cursor:pointer}a{color:var(--blue);text-decoration:none}
+
+        .top{background:var(--card);border-bottom:1px solid var(--bdr);padding:.45rem 1rem;display:flex;align-items:center;gap:.6rem;position:sticky;top:0;z-index:100}
+        .logo{font-weight:700;font-size:.95rem;display:flex;align-items:center;gap:.3rem;white-space:nowrap}
+        .logo b{width:24px;height:24px;background:var(--blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:#fff}
+        .tabs{display:flex;gap:2px}
+        .tab{padding:.35rem .8rem;border-radius:6px;background:transparent;border:none;color:var(--txt2);font-size:.78rem;font-weight:600;transition:all .12s}
+        .tab:hover{background:var(--card2)}.tab.on{background:var(--blue);color:#fff}
+        .search{flex:1;display:flex;gap:.3rem;max-width:480px}
+        .search input{flex:1;background:var(--card2);border:1px solid var(--bdr);color:var(--txt);padding:.4rem .7rem;border-radius:16px;font-size:.8rem;outline:none}
+        .search input:focus{border-color:var(--blue)}
+        .search button{background:var(--blue);color:#fff;border:none;padding:.4rem .8rem;border-radius:6px;font-size:.78rem;font-weight:600;white-space:nowrap}
+        .top-r{margin-left:auto;display:flex;gap:.5rem;align-items:center;font-size:.68rem;color:var(--dim)}
+        .dot{width:7px;height:7px;border-radius:50%;display:inline-block}.dot-g{background:var(--green)}.dot-r{background:var(--red)}
+        .btn-s{background:var(--card2);border:1px solid var(--bdr);color:var(--txt2);padding:2px 7px;border-radius:4px;font-size:.63rem;cursor:pointer}
+
+        .layout{display:flex;max-width:1200px;margin:0 auto;gap:.75rem;padding:.75rem}
+        .side{width:260px;flex-shrink:0}
+        .center{flex:1;min-width:0;max-width:680px}
+        .right{width:240px;flex-shrink:0}
+        @media(max-width:1024px){.side,.right{display:none}.center{max-width:100%}}
+
+        /* Sidebar card */
+        .sc{background:var(--card);border-radius:var(--r);margin-bottom:.6rem;overflow:hidden}
+        .sc-h{padding:.5rem .7rem;font-size:.72rem;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between}
+        .sc-b{padding:.3rem}
+        .sc-row{padding:.35rem .5rem;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.78rem;transition:background .1s}
+        .sc-row:hover{background:var(--card2)}
+        .sc-row-info{flex:1;min-width:0}
+        .sc-name{font-weight:600;font-size:.76rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .sc-sub{font-size:.6rem;color:var(--dim)}
+        .badge{font-size:.58rem;background:var(--card2);color:var(--txt2);padding:1px 5px;border-radius:8px}
+        .sc-btn{width:22px;height:22px;border-radius:50%;background:var(--card2);border:none;color:var(--dim);display:flex;align-items:center;justify-content:center;font-size:.65rem;transition:all .1s;flex-shrink:0}
+        .sc-btn:hover{background:var(--card3);color:var(--green)}
+        .chip{display:inline-block;background:var(--card2);color:var(--txt2);font-size:.62rem;padding:2px 6px;border-radius:3px;margin:1px;cursor:pointer;border:none;transition:all .1s}
+        .chip:hover{background:var(--blue);color:#fff}
+
+        /* Progress */
+        .prog{background:var(--card);border-radius:var(--r);padding:.5rem .7rem;margin-bottom:.6rem;display:none;font-size:.72rem}
+        .prog.show{display:block}
+        .prog-items{display:flex;flex-wrap:wrap;gap:3px;margin-top:.3rem}
+        .pi{display:inline-flex;align-items:center;gap:2px;background:var(--card2);padding:2px 6px;border-radius:3px;font-size:.6rem}
+        .pi-ok{color:var(--green)}.pi-run{color:var(--blue)}.pi-err{color:var(--red)}.pi-wait{color:var(--dim)}
+        .spin{display:inline-block;width:10px;height:10px;border:2px solid var(--card2);border-top:2px solid var(--blue);border-radius:50%;animation:s .6s linear infinite;vertical-align:middle}
+        @keyframes s{to{transform:rotate(360deg)}}
+
+        /* Stats */
+        .stats{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.6rem}
+        .st{background:var(--card);border-radius:var(--r);padding:.4rem .6rem;flex:1;min-width:80px;text-align:center}
+        .st b{font-size:1rem;display:block}.st small{font-size:.6rem;color:var(--dim)}
+
+        /* Post */
+        .post{background:var(--card);border-radius:var(--r);margin-bottom:.6rem;overflow:hidden}
+        .p-h{display:flex;align-items:center;gap:.4rem;padding:.5rem .65rem .2rem}
+        .p-av{width:32px;height:32px;border-radius:50%;background:var(--card2);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.7rem;color:var(--dim);flex-shrink:0}
+        .p-who{flex:1;min-width:0}
+        .p-nm{font-weight:600;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .p-sub{font-size:.63rem;color:var(--dim)}
+        .pt{font-size:.5rem;font-weight:700;padding:1px 4px;border-radius:3px;text-transform:uppercase}
+        .pt-fb{background:var(--blue);color:#fff}.pt-ig{background:var(--ig);color:#fff}
+        .p-txt{padding:.15rem .65rem .3rem;font-size:.8rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+        .p-txt .ht{color:var(--blue)}
+        .p-img{width:100%;background:#000}
+        .p-img img{width:100%;display:block;max-height:480px;object-fit:contain}
+        .p-img video{width:100%;display:block;max-height:480px;background:#000}
+        .p-vid{position:relative;background:#000;cursor:pointer}
+        .p-vid img{width:100%;max-height:480px;object-fit:contain}
+        .p-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+        .p-play div{width:48px;height:48px;background:rgba(0,0,0,.6);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem}
+        .p-saved{padding:2px 8px;font-size:.55rem;color:var(--green);background:rgba(66,183,42,.08)}
+        .p-tags{padding:.1rem .65rem;display:flex;flex-wrap:wrap;gap:3px}
+        .p-tag{font-size:.68rem;color:var(--blue)}
+        .p-loc{padding:.1rem .65rem;font-size:.68rem;color:var(--green)}
+        .p-eng{display:flex;gap:.6rem;padding:.3rem .65rem;border-top:1px solid var(--bdr);font-size:.66rem;color:var(--dim)}
+        .p-eng span{display:flex;align-items:center;gap:2px}.p-eng .sp{margin-left:auto}
+        .p-lnk{display:block;padding:.2rem .65rem .4rem;font-size:.66rem}
+        .empty{text-align:center;padding:2rem;color:var(--dim);font-size:.8rem}
+
+        /* Add form */
+        .add-form{background:var(--card);border-radius:var(--r);padding:.6rem;margin-bottom:.6rem}
+        .add-form h4{font-size:.75rem;margin-bottom:.4rem}
+        .fg{margin-bottom:.4rem}
+        .fg label{display:block;font-size:.65rem;color:var(--dim);margin-bottom:2px}
+        .fg input{width:100%;background:var(--card2);border:1px solid var(--bdr);color:var(--txt);padding:.35rem .5rem;border-radius:6px;font-size:.75rem;outline:none;font-family:inherit}
+        .fg input:focus{border-color:var(--blue)}
+        .btn-add{background:var(--blue);color:#fff;border:none;padding:.3rem .6rem;border-radius:6px;font-size:.7rem;font-weight:600}
+
+        /* Right col */
+        .tag-cloud{display:flex;flex-wrap:wrap;gap:2px;padding:.3rem}
+        .tag-c{font-size:.65rem;color:var(--blue);background:rgba(35,116,225,.1);padding:2px 6px;border-radius:3px;cursor:pointer}
+        .tag-c:hover{background:var(--blue);color:#fff}
+    </style>
+</head>
+<body>
+
+<div class="top">
+    <div class="logo"><b>M</b>Meta Scraper</div>
+    <div class="tabs">
+        <button class="tab on" onclick="switchTab('fb')">Facebook</button>
+        <button class="tab" onclick="switchTab('ig')">Instagram</button>
+        <button class="tab" onclick="switchTab('all')">All</button>
+    </div>
+    <div class="search">
+        <input id="q" placeholder="Page name (NVIDIA, Meta) or comma-separated list..." oninput="filterFeed()">
+        <select id="maxp" style="background:var(--card2);border:1px solid var(--bdr);color:var(--txt);padding:.4rem;border-radius:6px;font-size:.72rem">
+            <option value="10">10 posts</option>
+            <option value="25" selected>25 posts</option>
+            <option value="50">50 posts</option>
+            <option value="100">100 posts</option>
+        </select>
+        <button onclick="doScrape()">Scrape</button>
+    </div>
+    <div class="top-r">
+        <span class="dot dot-r" id="d-fb"></span>FB
+        <span class="dot dot-r" id="d-ig"></span>IG
+        <span id="total">0</span>
+        <button class="btn-s" onclick="openSetup()">Setup</button>
+    </div>
+</div>
+
+<div class="layout">
+    <!-- Left: Categories + Profiles -->
+    <div class="side">
+        <div class="sc">
+            <div class="sc-h">Categories <button class="sc-btn" onclick="toggleAdd()" title="Add">+</button></div>
+            <div id="add-panel" style="display:none">
+                <div class="add-form">
+                    <div class="fg"><label>Name</label><input id="a-name" placeholder="AI & Technology"></div>
+                    <div class="fg"><label>Keywords</label><input id="a-kw" placeholder="#ai, #chatgpt, #nuclear"></div>
+                    <div class="fg"><label>Handles</label><input id="a-h" placeholder="Meta, NVIDIA, NASA"></div>
+                    <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.3rem">
+                        <label style="font-size:.65rem;display:flex;align-items:center;gap:2px"><input type="checkbox" id="a-fb" checked>FB</label>
+                        <label style="font-size:.65rem;display:flex;align-items:center;gap:2px"><input type="checkbox" id="a-ig">IG</label>
+                    </div>
+                    <button class="btn-add" onclick="addCat()">Save</button>
+                </div>
+            </div>
+            <div class="sc-b" id="cats"></div>
+        </div>
+        <div class="sc">
+            <div class="sc-h">Profiles</div>
+            <div class="sc-b" id="profiles" style="max-height:250px;overflow-y:auto"></div>
+        </div>
+    </div>
+
+    <!-- Center: Progress + Feed -->
+    <div class="center">
+        <div class="stats" id="stats-row"></div>
+        <div class="prog" id="prog">
+            <div><span class="spin"></span> <span id="prog-title">Scraping...</span></div>
+            <div class="prog-items" id="prog-items"></div>
+        </div>
+        <div id="feed"></div>
+    </div>
+
+    <!-- Right: Hashtags + Info -->
+    <div class="right">
+        <div class="sc">
+            <div class="sc-h">Top Hashtags</div>
+            <div class="tag-cloud" id="tags"></div>
+        </div>
+        <div class="sc">
+            <div class="sc-h">Media</div>
+            <div style="padding:.5rem;font-size:.72rem;color:var(--dim)">
+                All media saved to:<br><code style="color:var(--green)">data/media/</code>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Setup -->
+<div id="setup" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+    <div style="background:var(--card);border-radius:var(--r);padding:1.25rem;width:380px;max-width:90vw">
+        <h3 style="font-size:.9rem;margin-bottom:.6rem">Chrome Setup</h3>
+        <div style="background:var(--card2);border-radius:6px;padding:.5rem;font-size:.7rem;line-height:1.6;margin-bottom:.4rem">
+            1. Run <code style="color:var(--blue)">start_chrome_debug.bat</code><br>
+            2. Left (9222) = Facebook &bull; Right (9223) = Instagram<br>
+            3. Log into each, come back here
+        </div>
+        <div style="display:flex;gap:.4rem;margin-bottom:.3rem">
+            <div style="flex:1;background:var(--card2);border-radius:6px;padding:.35rem;text-align:center;font-size:.7rem"><span class="dot dot-r" id="s-fb"></span> <b>FB</b></div>
+            <div style="flex:1;background:var(--card2);border-radius:6px;padding:.35rem;text-align:center;font-size:.7rem"><span class="dot dot-r" id="s-ig"></span> <b>IG</b></div>
+        </div>
+        <div id="s-msg"></div>
+        <div style="display:flex;gap:.3rem;margin-top:.5rem">
+            <button style="flex:1;background:var(--card2);border:none;color:var(--txt);padding:.35rem;border-radius:6px;font-size:.75rem" onclick="document.getElementById('setup').style.display='none'">Close</button>
+            <button style="flex:1;background:var(--blue);border:none;color:#fff;padding:.35rem;border-radius:6px;font-size:.75rem" onclick="checkSetup()">Check</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const A='';let curTab='fb',activeJobs={};
+
+// Init
+refresh();
+
+function refresh(){loadConn();loadStats();loadCats();loadProfiles();loadFeed();loadTags()}
+
+function switchTab(t){
+    curTab=t;
+    document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',
+        (t==='fb'&&b.textContent==='Facebook')||(t==='ig'&&b.textContent==='Instagram')||(t==='all'&&b.textContent==='All')));
+    loadFeed();loadStats();
+}
+
+function platformFilter(){return curTab==='all'?'':curTab==='fb'?'facebook':'instagram'}
+
+// Stats
+async function loadStats(){
+    const s=await(await fetch(A+'/api/stats')).json();
+    document.getElementById('total').textContent=s.total_posts;
+    const pf=platformFilter();
+    const posts=pf==='facebook'?s.facebook_posts:pf==='instagram'?s.instagram_posts:s.total_posts;
+    document.getElementById('stats-row').innerHTML=`
+        <div class="st"><b style="color:var(--blue)">${posts}</b><small>Posts</small></div>
+        <div class="st"><b>${s.total_media}</b><small>Media</small></div>
+        <div class="st"><b>${s.total_profiles}</b><small>Profiles</small></div>
+        <div class="st"><b>${s.total_hashtags}</b><small>Tags</small></div>`;
+}
+
+// Feed
+let feedOffset=0,feedLoading=false,feedHasMore=true;
+
+async function loadFeed(append){
+    if(feedLoading)return;
+    if(!append){feedOffset=0;feedHasMore=true}
+    if(!feedHasMore&&append)return;
+    feedLoading=true;
+
+    const pf=platformFilter();
+    let url=A+`/api/posts?limit=50&offset=${feedOffset}`;
+    if(pf)url+='&platform='+pf;
+    const q=document.getElementById('q').value.trim();
+    if(q)url+='&search='+encodeURIComponent(q);
+    const el=document.getElementById('feed');
+    if(!append)el.innerHTML='';
+
+    try{
+        const d=await(await fetch(url)).json();
+        if(!d.posts?.length&&!append){
+            el.innerHTML=q
+                ?`<div class="empty">No results for "${esc(q)}". Scraping will start automatically if it's a page name.</div>`
+                :'<div class="empty">No posts yet. Type a Facebook page name (e.g. NVIDIA, Meta, NASA) and hit Scrape.</div>';
+            feedHasMore=false;feedLoading=false;return;
+        }
+        // Remove old load-more button
+        const oldBtn=el.querySelector('.load-more');if(oldBtn)oldBtn.remove();
+
+        el.insertAdjacentHTML('beforeend',d.posts.map(renderPost).join(''));
+        feedOffset+=d.posts.length;
+        feedHasMore=d.has_more;
+
+        if(feedHasMore){
+            el.insertAdjacentHTML('beforeend',`<div class="load-more" style="text-align:center;padding:1rem"><button onclick="loadFeed(true)" style="background:var(--card2);border:1px solid var(--bdr);color:var(--txt2);padding:.5rem 1.5rem;border-radius:6px;font-size:.78rem;cursor:pointer">Load More (${d.total-feedOffset} remaining)</button></div>`);
+        }
+    }catch(e){if(!append)el.innerHTML=`<div class="empty">${e.message}</div>`}
+    feedLoading=false;
+}
+
+// Infinite scroll
+window.addEventListener('scroll',()=>{
+    if(feedLoading||!feedHasMore)return;
+    if((window.innerHeight+window.scrollY)>=document.body.offsetHeight-300){
+        loadFeed(true);
+    }
+});
+let filterTimer;
+function filterFeed(){
+    clearTimeout(filterTimer);
+    filterTimer=setTimeout(async()=>{
+        await loadFeed();
+        // If no results found and query looks like a page name, auto-scrape
+        const q=document.getElementById('q').value.trim();
+        const feedEl=document.getElementById('feed');
+        const isEmpty=feedEl.querySelector('.empty');
+        if(isEmpty&&q&&q.length>1&&!q.startsWith('#')&&!/\s/.test(q)){
+            // Looks like a page name with no existing data — auto-scrape
+            doScrape();
+        }
+    },400);
+}
+
+function renderPost(p){
+    const pl=p.platform==='instagram'?'ig':'fb';
+    let mH='';
+    if(p.media?.length){
+        const m=p.media[0];const lp=m.local_path||'';const lt=m.local_thumbnail||'';const rm=m.thumbnail_url||m.url||'';
+        if(m.type==='video'){
+            if(lp&&lp.endsWith('.mp4')){
+                mH=`<div class="p-img"><video src="${lp}" ${lt?`poster="${lt}"`:(rm&&!rm.endsWith('.mp4')?`poster="${rm}"`:'')} controls preload="metadata"></video><div class="p-saved">&#128190; ${lp}</div></div>`;
+            }else{
+                const th=lt||rm;const img=th&&!th.endsWith('.mp4')?`<img src="${th}" loading="lazy">`:'<div style="height:180px;display:flex;align-items:center;justify-content:center;color:var(--dim)">Video</div>';
+                mH=`<div class="p-img"><div class="p-vid" onclick="${p.post_url?`window.open('${p.post_url}','_blank')`:''}">
+                    ${img}<div class="p-play"><div>&#9654;</div></div></div>${lt?`<div class="p-saved">&#128190; ${lt}</div>`:''}</div>`;
+            }
+        }else{
+            const src=lp||rm;
+            mH=`<div class="p-img"><img src="${src}" loading="lazy" onerror="this.parentElement.remove()">${lp?`<div class="p-saved">&#128190; ${lp}</div>`:''}</div>`;
+        }
+        if(p.media.length>1)mH+=`<div style="padding:2px 8px;font-size:.55rem;color:var(--dim);background:var(--card2)">+${p.media.length-1} more</div>`;
+    }
+    const ts=p.timestamp?timeAgo(p.timestamp):(p.scraped_at?timeAgo(p.scraped_at):'');
+    const txt=p.text?esc(p.text).replace(/#(\w+)/g,'<span class="ht">#$1</span>'):'';
+    const tags=(p.hashtags||[]).length?`<div class="p-tags">${p.hashtags.map(t=>`<span class="p-tag">#${t}</span>`).join(' ')}</div>`:'';
+    const loc=p.location_name?`<div class="p-loc">&#128205; ${esc(p.location_name)}</div>`:'';
+    return `<div class="post">
+        <div class="p-h"><div class="p-av">${(p.author||'?')[0].toUpperCase()}</div>
+            <div class="p-who"><div class="p-nm">${esc(p.profile_display_name||p.author||'')}</div>
+                <div class="p-sub"><span class="pt pt-${pl}">${p.platform}</span> @${esc(p.author||'')} &middot; ${ts}</div></div></div>
+        ${txt?`<div class="p-txt">${txt}</div>`:''}${mH}${loc}${tags}
+        <div class="p-eng">${p.likes?`<span>&#128077; ${fmt(p.likes)}</span>`:''} ${p.comments?`<span>&#128172; ${fmt(p.comments)}</span>`:''} ${p.shares?`<span>&#128257; ${fmt(p.shares)}</span>`:''}<span class="sp">${ts}</span></div>
+        ${p.post_url?`<a class="p-lnk" href="${p.post_url}" target="_blank">View original &#8599;</a>`:''}
+    </div>`;
+}
+
+// Categories
+async function loadCats(){
+    const topics=await(await fetch(A+'/api/topics')).json();
+    const el=document.getElementById('cats');
+    if(!topics.length){el.innerHTML='<div style="padding:.4rem;font-size:.7rem;color:var(--dim)">No categories. Click + to add.</div>';return}
+    el.innerHTML=topics.map(t=>{
+        const items=[...t.keywords.map(k=>({v:k,t:'kw'})),...t.handles.map(h=>({v:h,t:'h'}))];
+        const plat=t.platforms?.[0]||'facebook';
+        return `<div class="sc-row" style="flex-wrap:wrap;padding-bottom:.25rem">
+            <div style="display:flex;align-items:center;gap:.3rem;width:100%">
+                <div class="sc-row-info"><div class="sc-name">${esc(t.name)}</div></div>
+                <span class="badge">${t.post_count}</span>
+                <button class="sc-btn" title="Scrape ALL" onclick="event.stopPropagation();scrapeCat('${esc(t.name)}')">&#9654;</button>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:1px;margin-top:2px;width:100%">
+                ${items.map(i=>`<button class="chip" onclick="event.stopPropagation();scrapeOne('${plat}','${esc(i.v)}')">${i.t==='kw'?esc(i.v):'@'+esc(i.v)}</button>`).join('')}
+            </div>
+        </div>`}).join('');
+}
+function toggleAdd(){const p=document.getElementById('add-panel');p.style.display=p.style.display==='none'?'block':'none'}
+async function addCat(){
+    const name=document.getElementById('a-name').value.trim();if(!name)return;
+    const kw=document.getElementById('a-kw').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const h=document.getElementById('a-h').value.split(',').map(s=>s.trim()).filter(Boolean);
+    const plats=[];if(document.getElementById('a-fb').checked)plats.push('facebook');if(document.getElementById('a-ig').checked)plats.push('instagram');
+    const all=await(await fetch(A+'/api/topics')).json();
+    const ex=all.find(t=>t.name===name);
+    if(ex){ex.keywords=[...new Set([...(ex.keywords||[]),...kw])];ex.handles=[...new Set([...(ex.handles||[]),...h])];if(!ex.platforms)ex.platforms=[];plats.forEach(p=>{if(!ex.platforms.includes(p))ex.platforms.push(p)})}
+    else all.push({name,keywords:kw,handles:h,platforms:plats});
+    await fetch(A+'/api/topics/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topics:all.map(t=>({name:t.name,keywords:t.keywords||[],handles:t.handles||[],platforms:t.platforms||['facebook']}))})});
+    document.getElementById('a-name').value='';document.getElementById('a-kw').value='';document.getElementById('a-h').value='';
+    toggleAdd();loadCats();
+}
+
+// Profiles
+async function loadProfiles(){
+    const profs=await(await fetch(A+'/api/profiles')).json();
+    const el=document.getElementById('profiles');
+    if(!profs.length){el.innerHTML='<div style="padding:.4rem;font-size:.7rem;color:var(--dim)">No profiles</div>';return}
+    el.innerHTML=profs.map(p=>{
+        const pl=p.platform==='instagram'?'ig':'fb';
+        return `<div class="sc-row" onclick="document.getElementById('q').value='@'+${JSON.stringify(p.username)};filterFeed()">
+            <div class="sc-row-info"><div class="sc-name">${esc(p.display_name||p.username)}</div>
+                <div class="sc-sub"><span class="pt pt-${pl}" style="font-size:.45rem;padding:0 3px">${p.platform}</span> ${p.follower_count?fmt(p.follower_count)+' followers':''}</div></div>
+            <span class="badge">${p.scraped_posts||0}</span></div>`}).join('');
+}
+
+// Tags
+async function loadTags(){
+    const tags=await(await fetch(A+'/api/hashtags?limit=25')).json();
+    document.getElementById('tags').innerHTML=tags.map(t=>
+        `<span class="tag-c" onclick="document.getElementById('q').value='#${t.tag}';filterFeed()">#${t.tag} <small>${t.count}</small></span>`).join('');
+}
+
+// Scrape
+document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')doScrape()});
+
+async function doScrape(){
+    const q=document.getElementById('q').value.trim();if(!q)return;
+    const plat=platformFilter()||'facebook';
+    const maxp=parseInt(document.getElementById('maxp').value)||25;
+    const targets=q.split(',').map(s=>s.trim()).filter(Boolean);
+    for(const t of targets){
+        const r=await(await fetch(A+'/api/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:plat,target:t,max_posts:maxp})})).json();
+        activeJobs[r.job_id]={target:t,platform:plat,status:'queued'};
+    }
+    showProg();pollAll();
+}
+async function scrapeOne(plat,target){
+    const maxp=parseInt(document.getElementById('maxp').value)||25;
+    const r=await(await fetch(A+'/api/scrape',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:plat,target,max_posts:maxp})})).json();
+    activeJobs[r.job_id]={target,platform:plat,status:'queued'};
+    showProg();pollAll();
+}
+async function scrapeCat(name){
+    const maxp=parseInt(document.getElementById('maxp').value)||25;
+    const r=await(await fetch(A+'/api/scrape-topic',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic_name:name,max_posts:maxp})})).json();
+    activeJobs[r.job_id]={target:name,platform:'topic',status:'queued',isTopic:true};
+    showProg();pollAll();
+}
+
+function showProg(){
+    const el=document.getElementById('prog');el.classList.add('show');
+    updateProg();
+}
+function updateProg(){
+    const jobs=Object.values(activeJobs);
+    const items=document.getElementById('prog-items');
+    const running=jobs.filter(j=>j.status!=='done'&&j.status!=='error').length;
+    document.getElementById('prog-title').textContent=running?`Scraping (${running} active)...`:'Done!';
+    items.innerHTML=jobs.map(j=>{
+        const cls=j.status==='done'?'pi-ok':j.status==='running'?'pi-run':j.status==='error'?'pi-err':'pi-wait';
+        const icon=j.status==='done'?'&#9989;':j.status==='error'?'&#10060;':j.status==='running'?'<span class="spin"></span>':'&#9203;';
+        let sub='';
+        if(j.items)sub=j.items.map(i=>`<span class="pi ${i.status==='done'?'pi-ok':i.status==='error'?'pi-err':'pi-run'}">${i.status==='done'?'&#9989;':'<span class="spin"></span>'} ${esc(i.label)} ${i.posts?'('+i.posts+')':''}</span>`).join('');
+        return `<span class="pi ${cls}">${icon} ${esc(j.target)} ${j.posts?'('+j.posts+')':''}</span>${sub}`;
+    }).join('');
+}
+
+async function pollAll(){
+    const ids=Object.keys(activeJobs).filter(id=>{const s=activeJobs[id].status;return s!=='done'&&s!=='error'});
+    if(!ids.length)return;
+    for(const id of ids){
+        try{
+            const d=await(await fetch(A+`/api/scrape/status/${id}`)).json();
+            activeJobs[id].status=d.status;activeJobs[id].posts=d.posts_scraped;
+            if(d.items)activeJobs[id].items=d.items;
+        }catch(e){}
+    }
+    updateProg();
+    const any=Object.values(activeJobs).some(j=>j.status!=='done'&&j.status!=='error');
+    if(any){setTimeout(pollAll,1500)}
+    else{
+        refresh();
+        setTimeout(()=>{activeJobs={};document.getElementById('prog').classList.remove('show')},3000);
+    }
+}
+
+// Connection
+async function loadConn(){
+    try{const s=await(await fetch(A+'/api/sessions')).json();
+    document.getElementById('d-fb').className='dot '+(s.facebook?.connected?'dot-g':'dot-r');
+    document.getElementById('d-ig').className='dot '+(s.instagram?.connected?'dot-g':'dot-r')}catch(e){}
+}
+function openSetup(){document.getElementById('setup').style.display='flex'}
+async function checkSetup(){
+    const d=await(await fetch(A+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+    document.getElementById('s-msg').innerHTML=`<div style="font-size:.68rem;padding:.25rem;border-radius:4px;margin-top:.25rem;${d.success?'background:rgba(66,183,42,.1);color:var(--green)':'background:rgba(240,40,73,.1);color:var(--red)'}">${d.message}</div>`;
+    document.getElementById('s-fb').className='dot '+(d.facebook?'dot-g':'dot-r');
+    document.getElementById('s-ig').className='dot '+(d.instagram?'dot-g':'dot-r');loadConn();
+}
+
+// Utils
+function fmt(n){if(!n)return'';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return n.toString()}
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function timeAgo(ts){try{const d=new Date(ts);const s=(Date.now()-d)/1000;if(s<60)return'now';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';if(s<604800)return Math.floor(s/86400)+'d';return d.toLocaleDateString()}catch(e){return''}}
+</script>
+</body>
+</html>

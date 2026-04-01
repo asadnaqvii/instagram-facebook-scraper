@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/
+sessions/
+output/
+*.db
+myenv/
+virenv/
+venv/
+.venv/
+node_modules/
+.claude/
+twitter_scraper/
