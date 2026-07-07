@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}New scrape · meta_osint{% endblock %}
+{% block body %}
+<h2>New scrape</h2>
+{% if error %}<p style="background:rgba(248,81,73,.15);border:1px solid #f85149;color:#ff9b95;padding:10px 14px;border-radius:8px;max-width:640px;">⚠️ {{ error }}</p>{% endif %}
+<form method="post" style="max-width:640px;">
+  <label>Keywords (one per line, or comma-separated) — type your own; grey text is just an example</label>
+  <textarea name="keywords" rows="6" style="width:100%;" required
+            placeholder="e.g.  climate change, renewable energy, #nuclear"></textarea>
+
+  <label>Mode</label>
+  <select name="mode">
+    <option value="search">Search — accounts + hashtags + posts (recommended)</option>
+    <option value="profile">Profile / Page — scrape specific accounts</option>
+    <option value="hashtag">Hashtag — scrape a hashtag feed</option>
+  </select>
+
+  <label>Platforms</label>
+  <div>
+    {% for p in platforms %}
+    <label style="display:inline-flex; align-items:center; gap:6px; margin-right:16px;">
+      <input type="checkbox" name="platforms" value="{{ p }}" checked> {{ p }}
+    </label>
+    {% endfor %}
+  </div>
+
+  <label>Max posts per keyword</label>
+  <input type="number" name="max_posts" value="15" min="1" max="200" style="width:100px;">
+
+  <div style="margin-top:12px;">
+    <label style="display:inline-flex; align-items:center; gap:6px;"><input type="checkbox" name="comments" checked> Extract comments</label>
+    <label style="display:inline-flex; align-items:center; gap:6px;"><input type="checkbox" name="analyze" checked> LLM analysis</label>
+  </div>
+
+  <div style="margin-top:20px;"><button type="submit">Start scrape</button></div>
+  <p class="muted" style="margin-top:12px;">Requires Chrome running with CDP + logged in. Run <span class="mono">python -m meta_osint.main diagnose</span> to verify.</p>
+</form>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · meta_osint{% endblock %}
+{% block body %}
+<h2>Dashboard</h2>
+<div class="grid">
+  {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Comments','comments'),('Media','media'),('Hashtags','hashtags'),('Locations','locations'),('Keywords','keywords'),('Runs','search_runs')] %}
+  <div class="card"><div class="stat">{{ stats[key] }}</div><div class="stat-label">{{ label }}</div></div>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-top:20px;">
+  <h3 style="margin-top:0;">➕ Add keywords &amp; scrape</h3>
+  <form method="post" action="{{ url_for('scrape') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+    <div style="flex:1; min-width:260px;">
+      <label style="margin-top:0;">Keywords (comma or newline separated) — type your own, the grey text is just an example</label>
+      <textarea name="keywords" rows="2" style="width:100%;" required
+                placeholder="e.g. hypersonic, drone warfare, submarine"></textarea>
+    </div>
+    <div>
+      <label style="margin-top:0;">Posts/kw</label>
+      <input type="number" name="max_posts" value="15" min="1" max="100" style="width:80px;">
+    </div>
+    <input type="hidden" name="mode" value="search">
+    <input type="hidden" name="platforms" value="instagram">
+    <input type="hidden" name="platforms" value="facebook">
+    <input type="hidden" name="comments" value="on">
+    <button type="submit">Scrape</button>
+  </form>
+  <p class="muted" style="margin:8px 0 0; font-size:12px;">Searches both Instagram &amp; Facebook — general search (accounts/pages) + hashtag feed (posts). Sentiment analysis is off for speed.</p>
+</div>
+
+<h3 style="margin-top:32px;">Keywords</h3>
+{% if keywords %}
+<table>
+  <tr><th>Keyword</th><th>Posts</th><th>Accounts</th><th>Hashtags</th><th>Places</th><th></th></tr>
+  {% for k in keywords %}
+  <tr>
+    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}"><strong>{{ k.keyword }}</strong></a></td>
+    <td>{{ k.posts or 0 }}</td>
+    <td>{{ k.accounts or 0 }}</td>
+    <td>{{ k.hashtags or 0 }}</td>
+    <td>{{ k.places or 0 }}</td>
+    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}" style="font-size:12px;">view all →</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">No keywords yet. <a href="{{ url_for('scrape') }}">Run your first scrape →</a></p>
+{% endif %}
+
+<h3 style="margin-top:32px;">Recent posts</h3>
+{% include "_posts_table.html" %}
+
+<details style="margin-top:32px;">
+  <summary class="muted">Effective config</summary>
+  <pre class="mono">{{ config | tojson(indent=2) }}</pre>
+</details>
+{% endblock %}

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}meta_osint{% endblock %}</title>
+  <style>
+    :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e; --accent:#2f81f7; --ig:#e1306c; --fb:#1877f2; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+    a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+    header { background:var(--panel); border-bottom:1px solid var(--border); padding:0 20px; display:flex; align-items:center; gap:20px; height:56px; }
+    header .brand { font-weight:700; font-size:16px; }
+    header nav a { color:var(--muted); margin-right:16px; font-size:14px; }
+    header nav a:hover { color:var(--fg); }
+    .container { max-width:1200px; margin:0 auto; padding:24px 20px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:14px; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px; }
+    .stat { font-size:28px; font-weight:700; } .stat-label { color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:.04em; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+    .badge.instagram { background:rgba(225,48,108,.15); color:#f472b6; }
+    .badge.facebook { background:rgba(24,119,242,.15); color:#60a5fa; }
+    .pill { background:#21262d; border:1px solid var(--border); border-radius:12px; padding:1px 8px; font-size:12px; color:var(--muted); margin-right:4px; }
+    input, select, textarea, button { font:inherit; background:#0d1117; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
+    button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; font-weight:600; }
+    button:hover { opacity:.9; }
+    label { display:block; margin:12px 0 4px; color:var(--muted); font-size:13px; }
+    .muted { color:var(--muted); } .mono { font-family: ui-monospace, monospace; font-size:12px; }
+    .thumb { width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--border); }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand">🛰️ meta_osint</span>
+    <nav>
+      <a href="{{ url_for('index') }}">Dashboard</a>
+      <a href="{{ url_for('posts') }}">Posts</a>
+      <a href="{{ url_for('accounts') }}">Accounts</a>
+      <a href="{{ url_for('hashtags') }}">Hashtags</a>
+      <a href="{{ url_for('scrape') }}">New scrape</a>
+    </nav>
+    <a id="scrape-badge" href="#" style="margin-left:auto; display:none; align-items:center; gap:6px;
+        background:rgba(47,129,247,.15); border:1px solid var(--accent); color:#7cb3ff;
+        border-radius:14px; padding:3px 12px; font-size:13px; text-decoration:none;">
+      <span class="scrape-dot" style="width:8px;height:8px;border-radius:50%;background:#2f81f7;display:inline-block;
+            animation:pulse 1.2s ease-in-out infinite;"></span>
+      <span id="scrape-badge-text">scraping…</span>
+    </a>
+    <label style="color:var(--muted); font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer; margin-left:16px;">
+      <input type="checkbox" id="autorefresh-toggle"> auto-refresh
+      <span id="autorefresh-countdown" class="muted" style="font-size:12px; min-width:28px;"></span>
+    </label>
+  </header>
+  <style>@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }</style>
+  <div class="container">
+    {% block body %}{% endblock %}
+  </div>
+
+  <script>
+  // Header "scraping…" badge — polls for active jobs every 3s so you always
+  // know a scrape is running, even after navigating away from its job page.
+  (function () {
+    const badge = document.getElementById('scrape-badge');
+    const badgeText = document.getElementById('scrape-badge-text');
+    async function checkJobs() {
+      try {
+        const r = await fetch('/api/jobs/active');
+        if (r.ok) {
+          const d = await r.json();
+          if (d.count > 0) {
+            const job = d.active[0];
+            const kw = (job.keywords || []).slice(0, 2).join(', ');
+            badgeText.textContent = d.count > 1
+              ? `scraping ${d.count} jobs…`
+              : `scraping${kw ? ' ' + kw : ''}…`;
+            badge.href = '/job/' + job.id;
+            badge.style.display = 'flex';
+          } else {
+            badge.style.display = 'none';
+          }
+        }
+      } catch (e) { /* ignore */ }
+      setTimeout(checkJobs, 3000);
+    }
+    checkJobs();
+  })();
+
+  // Dashboard auto-refresh. Off by default; the choice is remembered. Pauses
+  // when the tab is hidden or an interactive element (form/video/details) is
+  // in use, so a refresh never interrupts you mid-action.
+  (function () {
+    const INTERVAL = 15;                      // seconds
+    const toggle = document.getElementById('autorefresh-toggle');
+    const countdownEl = document.getElementById('autorefresh-countdown');
+    let remaining = INTERVAL;
+
+    const enabled = () => localStorage.getItem('meta_osint_autorefresh') === '1';
+    toggle.checked = enabled();
+
+    function userIsBusy() {
+      const a = document.activeElement;
+      if (a && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(a.tagName)) return true;
+      // A video that's playing.
+      for (const v of document.querySelectorAll('video')) {
+        if (!v.paused && !v.ended && v.currentTime > 0) return true;
+      }
+      // An expanded <details> (e.g. reading comments).
+      for (const d of document.querySelectorAll('details[open]')) return true;
+      return false;
+    }
+
+    toggle.addEventListener('change', () => {
+      localStorage.setItem('meta_osint_autorefresh', toggle.checked ? '1' : '0');
+      remaining = INTERVAL;
+      countdownEl.textContent = toggle.checked ? remaining + 's' : '';
+    });
+
+    setInterval(() => {
+      if (!toggle.checked) { countdownEl.textContent = ''; return; }
+      if (document.hidden || userIsBusy()) { countdownEl.textContent = '⏸'; return; }
+      remaining -= 1;
+      countdownEl.textContent = remaining + 's';
+      if (remaining <= 0) window.location.reload();
+    }, 1000);
+
+    if (toggle.checked) countdownEl.textContent = remaining + 's';
+  })();
+  </script>
+</body>
+</html>

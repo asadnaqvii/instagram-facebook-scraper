@@ -1,0 +1,16 @@
+# Core
+playwright>=1.40
+pydantic>=2.0
+requests>=2.28
+python-dotenv>=1.0
+
+# Media + metadata extraction (relies on Meta's internal endpoints, not the DOM)
+yt-dlp>=2024.1.0
+
+# Web dashboard
+flask>=3.0
+
+# After install, run once:
+#   python -m playwright install chromium
+# (only needed if you ever fall back to a Playwright-launched browser;
+#  the default CDP mode uses your own Chrome.)

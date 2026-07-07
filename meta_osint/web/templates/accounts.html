@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Accounts · meta_osint{% endblock %}
+{% block body %}
+<h2>Accounts</h2>
+<form method="get" style="margin-bottom:16px;">
+  <select name="platform" onchange="this.form.submit()"><option value="">All platforms</option>
+    <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
+    <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option></select>
+</form>
+{% if accounts %}
+<table>
+  <tr><th></th><th>Platform</th><th>Username</th><th>Name</th><th>Followers</th><th>Posts</th><th>Verified</th><th>Bio</th></tr>
+  {% for a in accounts %}
+  <tr>
+    <td>{% if a.profile_picture_url %}<img class="thumb" style="border-radius:50%;width:40px;height:40px;" src="{{ a.profile_picture_url }}">{% endif %}</td>
+    <td><span class="badge {{ a.platform }}">{{ a.platform }}</span></td>
+    <td><a href="{{ a.profile_url }}" target="_blank" class="mono">@{{ a.username }}</a></td>
+    <td>{{ a.display_name or '—' }}</td>
+    <td>{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>
+    <td>{{ a.post_count or '—' }}</td>
+    <td>{{ '✓' if a.is_verified else '' }}</td>
+    <td style="max-width:320px;">{{ (a.bio or '')[:120] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No accounts yet.</p>{% endif %}
+{% endblock %}

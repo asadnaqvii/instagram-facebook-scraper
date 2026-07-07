@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ keyword }} · meta_osint{% endblock %}
+{% block body %}
+<h2>🔑 {{ keyword }}</h2>
+
+{# Summary counts for this keyword #}
+<div class="grid" style="margin-bottom:20px;">
+  <div class="card"><div class="stat">{{ d.posts|length }}</div><div class="stat-label">Posts</div></div>
+  <div class="card"><div class="stat">{{ d.accounts|length }}</div><div class="stat-label">Accounts</div></div>
+  <div class="card"><div class="stat">{{ d.hashtags|length }}</div><div class="stat-label">Hashtags</div></div>
+  <div class="card"><div class="stat">{{ d.places|length }}</div><div class="stat-label">Places</div></div>
+</div>
+
+{# Tab-like anchors #}
+<div style="margin-bottom:16px; display:flex; gap:8px; flex-wrap:wrap;">
+  <a href="#posts" class="pill" style="text-decoration:none;">Posts ({{ d.posts|length }})</a>
+  <a href="#accounts" class="pill" style="text-decoration:none;">Accounts ({{ d.accounts|length }})</a>
+  <a href="#hashtags" class="pill" style="text-decoration:none;">Hashtags ({{ d.hashtags|length }})</a>
+  {% if d.places %}<a href="#places" class="pill" style="text-decoration:none;">Places ({{ d.places|length }})</a>{% endif %}
+</div>
+
+{# ── ACCOUNTS ── #}
+<h3 id="accounts">Accounts ({{ d.accounts|length }})</h3>
+{% if d.accounts %}
+<table>
+  <tr><th></th><th>Platform</th><th>Username</th><th>Name</th><th>Followers</th><th>✓</th></tr>
+  {% for a in d.accounts %}
+  <tr>
+    <td>{% if a.profile_picture_url %}<img class="thumb" style="width:36px;height:36px;border-radius:50%;" src="{{ a.profile_picture_url }}">{% endif %}</td>
+    <td><span class="badge {{ a.platform }}">{{ a.platform }}</span></td>
+    <td><a href="{{ a.profile_url }}" target="_blank" class="mono">@{{ a.username }}</a></td>
+    <td>{{ a.display_name or '—' }}</td>
+    <td>{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>
+    <td>{{ '✓' if a.is_verified else '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No accounts.</p>{% endif %}
+
+{# ── HASHTAGS ── #}
+<h3 id="hashtags" style="margin-top:28px;">Hashtags ({{ d.hashtags|length }})</h3>
+{% if d.hashtags %}
+<div style="display:flex; flex-wrap:wrap; gap:8px;">
+  {% for h in d.hashtags %}
+  <a href="{{ h.url }}" target="_blank" class="pill" style="text-decoration:none; font-size:14px;">
+    <span class="badge {{ h.platform }}" style="font-size:9px;">{{ h.platform[:2] }}</span>
+    #{{ h.tag }}{% if h.post_count %} <span class="muted">({{ '{:,}'.format(h.post_count) }})</span>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% else %}<p class="muted">No hashtags.</p>{% endif %}
+
+{# ── PLACES ── #}
+{% if d.places %}
+<h3 id="places" style="margin-top:28px;">Places ({{ d.places|length }})</h3>
+<div style="display:flex; flex-wrap:wrap; gap:8px;">
+  {% for pl in d.places %}<span class="pill">📍 {{ pl.name }}{% if pl.latitude %} ({{ pl.latitude }}, {{ pl.longitude }}){% endif %}</span>{% endfor %}
+</div>
+{% endif %}
+
+{# ── POSTS ── #}
+<h3 id="posts" style="margin-top:28px;">Posts ({{ d.posts|length }})
+  <a href="{{ url_for('posts', keyword=keyword) }}" style="font-size:13px; font-weight:400;">open full view →</a>
+</h3>
+{% if d.posts %}
+<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px;">
+  {% for p in d.posts %}
+  <div class="card" style="display:flex; flex-direction:column; gap:8px;">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="badge {{ p.platform }}">{{ p.platform }}</span>
+      {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>{% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
+    </div>
+    {% if p.videos %}<video controls preload="none" style="width:100%;border-radius:8px;max-height:280px;background:#000;" {% if p.videos[0].thumb_src %}poster="{{ p.videos[0].thumb_src }}"{% endif %} src="{{ p.videos[0].src }}"></video>
+    {% elif p.images %}<img src="{{ p.images[0].src }}" style="width:100%;height:180px;object-fit:cover;border-radius:8px;">{% endif %}
+    {% if p.text %}<div style="font-size:13px;">{{ p.text[:200] }}{% if p.text|length > 200 %}…{% endif %}</div>{% endif %}
+    <div class="muted" style="font-size:12px; display:flex; gap:12px; flex-wrap:wrap;">
+      <span>❤ {{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</span>
+      <span>💬 {{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</span>
+      {% if p.views is not none %}<span>👁 {{ '{:,}'.format(p.views) }}</span>{% endif %}
+      {% if p.timestamp %}<span>🕒 {{ p.timestamp[:10] }}</span>{% endif %}
+      {% if p.comments %}<span>{{ p.comments|length }} comments sampled</span>{% endif %}
+    </div>
+    {% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener" style="font-size:12px;">🔗 open post on {{ p.platform }} →</a>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}<p class="muted">No posts.</p>{% endif %}
+{% endblock %}

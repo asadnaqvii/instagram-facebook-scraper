@@ -1,0 +1,22 @@
+# Strategic & defense-related keywords for meta_osint
+# One keyword per line; lines starting with # are ignored.
+# Run: python -m meta_osint.main search -f meta_osint/keywords_defense.txt
+
+nuclear
+strategic deterrence
+ballistic missile
+missile test
+defence
+Pakistan defence
+Pakistan army
+military conflict
+war
+armed forces
+national security
+geopolitics
+international relations
+current affairs
+border conflict
+air defence
+hypersonic missile
+defense technology

@@ -1,15 +1,36 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 .env
-data/
-sessions/
-output/
-*.db
 myenv/
 virenv/
 venv/
 .venv/
+
+# Runtime data (scraped content, sessions, downloaded media, DBs)
+data/
+sessions/
+output/
+*.db
+*.db-wal
+*.db-shm
+meta_osint/selectors/selectors.json
+
+# Node
 node_modules/
+
+# Editor / tooling
 .claude/
-twitter_scraper/
+
+# --- Old / superseded code (NOT part of the meta_osint scraper) ---
+# The broken v1 scraper and the earlier POC — kept locally, not published.
+# Leading slash = repo-root only, so meta_osint/web etc. are NOT affected.
+/twitter_scraper/
+/strat-watch-openclaw-socialmedia-poc-v4/
+/scrapers/
+/models/
+/utils/
+/web/
+/config.py
+/main.py
