@@ -1,9 +1,13 @@
-# Instagram & Facebook OSINT Scraper (`meta_osint`)
+# Strat-Watch Meta — Instagram & Facebook OSINT Scraper
 
 A keyword-driven scraper that extracts the full breadth of public content from
 **Instagram and Facebook** — posts, captions, images, videos, hashtags,
 locations, account info, comments, shares, likes, views — into a local SQLite
 database, with a web dashboard to browse it.
+
+> **New here?** The fastest path is **[`SETUP.md`](SETUP.md)** — on Windows you
+> can literally double-click **`run.bat`** and it installs everything, opens
+> Chrome to log in, and starts the dashboard. **Ollama is not required.**
 
 It is built to survive Meta's constant DOM churn (the thing that makes naïve
 selector-based scrapers silently return empty results):

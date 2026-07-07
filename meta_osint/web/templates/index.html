@@ -1,35 +1,36 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · meta_osint{% endblock %}
+{% block title %}Dashboard · Strat-Watch Meta{% endblock %}
 {% block body %}
-<div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:var(--sp-6);">
-  <h1>Dashboard</h1>
+<div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:var(--sp-6); flex-wrap:wrap; gap:var(--sp-3);">
+  <div>
+    <h1>Dashboard</h1>
+    <p class="muted micro" style="margin-top:6px;">Instagram &amp; Facebook OSINT · keyword-driven intelligence</p>
+  </div>
   <a href="{{ url_for('scrape') }}"><button>＋ New scrape</button></a>
 </div>
 
+{# Core metrics — Runs & Locations intentionally omitted #}
 <div class="metrics">
-  {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Comments','comments'),('Media','media'),('Hashtags','hashtags'),('Locations','locations'),('Keywords','keywords'),('Runs','search_runs')] %}
+  {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Comments','comments'),('Media','media'),('Hashtags','hashtags'),('Keywords','keywords')] %}
   <div class="metric"><div class="val">{{ '{:,}'.format(stats[key]) }}</div><div class="lbl">{{ label }}</div></div>
   {% endfor %}
 </div>
 
-<div class="section-head"><h3>Keywords</h3><div class="rule"></div>
-  <span class="micro">{{ keywords|length }} tracked</span>
+<div class="section-head"><h3>Keyword mosaic</h3><div class="rule"></div>
+  <span class="micro">{{ keywords|length }} keywords · sized by data volume</span>
 </div>
 {% if keywords %}
-<div class="card" style="padding:0; overflow:hidden;">
-<table>
-  <tr><th>Keyword</th><th>Posts</th><th>Accounts</th><th>Hashtags</th><th>Places</th><th></th></tr>
+<div class="mosaic">
   {% for k in keywords %}
-  <tr>
-    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}"><span class="kw">{{ k.keyword }}</span></a></td>
-    <td class="mono">{{ k.posts or 0 }}</td>
-    <td class="mono">{{ k.accounts or 0 }}</td>
-    <td class="mono">{{ k.hashtags or 0 }}</td>
-    <td class="mono">{{ k.places or 0 }}</td>
-    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}" class="micro">view all →</a></td>
-  </tr>
+  <a href="{{ url_for('keyword_detail', keyword=k.keyword) }}" class="kw-tile {{ k.tier }}">
+    <div class="kw-name">{{ k.keyword }}</div>
+    <div class="kw-stats">
+      <span class="kw-stat"><span class="kw-big">{{ k.posts or 0 }}</span> posts</span>
+      <span class="kw-stat"><b>{{ k.accounts or 0 }}</b> accts</span>
+      {% if k.hashtags %}<span class="kw-stat"><b>{{ k.hashtags }}</b> tags</span>{% endif %}
+    </div>
+  </a>
   {% endfor %}
-</table>
 </div>
 {% else %}
 <p class="muted">No keywords yet. <a href="{{ url_for('scrape') }}">Run your first scrape →</a></p>

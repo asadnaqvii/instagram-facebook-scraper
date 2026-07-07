@@ -80,6 +80,16 @@ def create_app() -> Flask:
             stats = db.get_stats()
             keywords = db.get_keywords()
             recent_posts = _attach_media_urls(db.get_posts(limit=25))
+        # Weight each keyword by how much data it surfaced, then bucket into
+        # mosaic tiers (bigger tile = more data) like the design's keyword
+        # mosaic. weight = posts*3 + accounts + hashtags (posts count most).
+        for k in keywords:
+            k["weight"] = (k.get("posts") or 0) * 3 + (k.get("accounts") or 0) + (k.get("hashtags") or 0)
+        max_w = max((k["weight"] for k in keywords), default=1) or 1
+        for k in keywords:
+            r = k["weight"] / max_w
+            k["tier"] = "xl" if r > 0.75 else "l" if r > 0.45 else "m" if r > 0.22 else "s"
+        keywords.sort(key=lambda k: k["weight"], reverse=True)
         return render_template("index.html", stats=stats, keywords=keywords, posts=recent_posts, config=config.as_dict())
 
     @app.route("/posts")
