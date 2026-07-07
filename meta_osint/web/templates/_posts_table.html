@@ -1,24 +1,26 @@
 {% if posts %}
+<div class="card" style="padding:0; overflow:hidden;">
 <table>
   <tr><th></th><th>Platform</th><th>Author</th><th>Text</th><th>❤</th><th>💬</th><th>👁</th><th>Keyword</th><th>Link</th></tr>
   {% for p in posts %}
   <tr>
     <td>
-      {% if p.videos %}<span class="pill">▶ video</span>
+      {% if p.videos %}<span class="chip cyan">▶ video</span>
       {% elif p.images and p.images[0].thumb_src %}<img class="thumb" src="{{ p.images[0].thumb_src }}" alt="">
       {% endif %}
     </td>
-    <td><span class="badge {{ p.platform }}">{{ p.platform }}</span></td>
+    <td><span class="badge {{ p.platform }}"><span class="dot"></span>{{ p.platform }}</span></td>
     <td>{% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>{% else %}<span class="muted">{{ p.author_display_name or '—' }}</span>{% endif %}</td>
     <td style="max-width:340px;">{% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener">{{ (p.text or '')[:120] }}{% if (p.text or '')|length > 120 %}…{% endif %}</a>{% else %}{{ (p.text or '')[:120] }}{% endif %}</td>
-    <td>{{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</td>
-    <td>{{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</td>
-    <td>{{ '{:,}'.format(p.views) if p.views is not none else '—' }}</td>
-    <td style="max-width:150px;">{% for kw in p.keywords[:3] %}<span class="pill">{{ kw }}</span>{% endfor %}</td>
+    <td class="mono">{{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</td>
+    <td class="mono">{{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</td>
+    <td class="mono">{{ '{:,}'.format(p.views) if p.views is not none else '—' }}</td>
+    <td style="max-width:150px;">{% for kw in p.keywords[:2] %}<span class="chip">{{ kw }}</span> {% endfor %}</td>
     <td>{% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener" title="open post">🔗</a>{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p class="muted">No posts.</p>
 {% endif %}

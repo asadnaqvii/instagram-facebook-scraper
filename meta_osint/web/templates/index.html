@@ -1,58 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · meta_osint{% endblock %}
 {% block body %}
-<h2>Dashboard</h2>
-<div class="grid">
+<div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:var(--sp-6);">
+  <h1>Dashboard</h1>
+  <a href="{{ url_for('scrape') }}"><button>＋ New scrape</button></a>
+</div>
+
+<div class="metrics">
   {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Comments','comments'),('Media','media'),('Hashtags','hashtags'),('Locations','locations'),('Keywords','keywords'),('Runs','search_runs')] %}
-  <div class="card"><div class="stat">{{ stats[key] }}</div><div class="stat-label">{{ label }}</div></div>
+  <div class="metric"><div class="val">{{ '{:,}'.format(stats[key]) }}</div><div class="lbl">{{ label }}</div></div>
   {% endfor %}
 </div>
 
-<div class="card" style="margin-top:20px;">
-  <h3 style="margin-top:0;">➕ Add keywords &amp; scrape</h3>
-  <form method="post" action="{{ url_for('scrape') }}" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-    <div style="flex:1; min-width:260px;">
-      <label style="margin-top:0;">Keywords (comma or newline separated) — type your own, the grey text is just an example</label>
-      <textarea name="keywords" rows="2" style="width:100%;" required
-                placeholder="e.g. hypersonic, drone warfare, submarine"></textarea>
-    </div>
-    <div>
-      <label style="margin-top:0;">Posts/kw</label>
-      <input type="number" name="max_posts" value="15" min="1" max="100" style="width:80px;">
-    </div>
-    <input type="hidden" name="mode" value="search">
-    <input type="hidden" name="platforms" value="instagram">
-    <input type="hidden" name="platforms" value="facebook">
-    <input type="hidden" name="comments" value="on">
-    <button type="submit">Scrape</button>
-  </form>
-  <p class="muted" style="margin:8px 0 0; font-size:12px;">Searches both Instagram &amp; Facebook — general search (accounts/pages) + hashtag feed (posts). Sentiment analysis is off for speed.</p>
+<div class="section-head"><h3>Keywords</h3><div class="rule"></div>
+  <span class="micro">{{ keywords|length }} tracked</span>
 </div>
-
-<h3 style="margin-top:32px;">Keywords</h3>
 {% if keywords %}
+<div class="card" style="padding:0; overflow:hidden;">
 <table>
   <tr><th>Keyword</th><th>Posts</th><th>Accounts</th><th>Hashtags</th><th>Places</th><th></th></tr>
   {% for k in keywords %}
   <tr>
-    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}"><strong>{{ k.keyword }}</strong></a></td>
-    <td>{{ k.posts or 0 }}</td>
-    <td>{{ k.accounts or 0 }}</td>
-    <td>{{ k.hashtags or 0 }}</td>
-    <td>{{ k.places or 0 }}</td>
-    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}" style="font-size:12px;">view all →</a></td>
+    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}"><span class="kw">{{ k.keyword }}</span></a></td>
+    <td class="mono">{{ k.posts or 0 }}</td>
+    <td class="mono">{{ k.accounts or 0 }}</td>
+    <td class="mono">{{ k.hashtags or 0 }}</td>
+    <td class="mono">{{ k.places or 0 }}</td>
+    <td><a href="{{ url_for('keyword_detail', keyword=k.keyword) }}" class="micro">view all →</a></td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}
 <p class="muted">No keywords yet. <a href="{{ url_for('scrape') }}">Run your first scrape →</a></p>
 {% endif %}
 
-<h3 style="margin-top:32px;">Recent posts</h3>
+<div class="section-head"><h3>Recent posts</h3><div class="rule"></div>
+  <a href="{{ url_for('posts') }}" class="micro">view all posts →</a>
+</div>
 {% include "_posts_table.html" %}
 
-<details style="margin-top:32px;">
-  <summary class="muted">Effective config</summary>
-  <pre class="mono">{{ config | tojson(indent=2) }}</pre>
+<details style="margin-top:var(--sp-8);">
+  <summary class="micro" style="cursor:pointer;">Effective config</summary>
+  <pre class="mono" style="background:var(--bg-surface-1); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-4); margin-top:var(--sp-3); overflow:auto;">{{ config | tojson(indent=2) }}</pre>
 </details>
 {% endblock %}

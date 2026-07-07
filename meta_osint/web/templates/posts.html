@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Posts · meta_osint{% endblock %}
 {% block body %}
-<h2>Posts
-  {% if keyword %}· <span class="muted">{{ keyword }}</span>{% endif %}
-  {% if platform %}· <span class="badge {{ platform }}">{{ platform }}</span>{% endif %}
-  <span class="muted" style="font-size:14px;">({{ posts|length }})</span>
-</h2>
+<div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
+  <h1>Posts</h1>
+  {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
+  {% if platform %}<span class="badge {{ platform }}"><span class="dot"></span>{{ platform }}</span>{% endif %}
+  <span class="micro">{{ posts|length }} results</span>
+</div>
 
-<form method="get" style="margin-bottom:20px; display:flex; gap:8px; flex-wrap:wrap;">
+<form method="get" style="margin-bottom:var(--sp-6); display:flex; gap:var(--sp-2); flex-wrap:wrap;">
   <select name="platform">
     <option value="">All platforms</option>
     <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
@@ -15,11 +16,9 @@
   </select>
   <select name="keyword">
     <option value="">All keywords</option>
-    {% for k in all_keywords %}
-    <option value="{{ k }}" {{ 'selected' if keyword==k }}>{{ k }}</option>
-    {% endfor %}
+    {% for k in all_keywords %}<option value="{{ k }}" {{ 'selected' if keyword==k }}>{{ k }}</option>{% endfor %}
   </select>
-  <select name="sort" title="Sort order">
+  <select name="sort">
     <option value="latest" {{ 'selected' if sort=='latest' }}>Latest (best available time)</option>
     <option value="posted" {{ 'selected' if sort=='posted' }}>Newest posted</option>
     <option value="scraped" {{ 'selected' if sort=='scraped' }}>Recently scraped</option>
@@ -28,60 +27,50 @@
 </form>
 
 {% if posts %}
-<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px;">
+<div class="feed-grid">
   {% for p in posts %}
-  <div class="card" style="display:flex; flex-direction:column; gap:10px;">
+  <div class="card post-card">
     <div style="display:flex; align-items:center; gap:8px;">
-      <span class="badge {{ p.platform }}">{{ p.platform }}</span>
+      <span class="badge {{ p.platform }}"><span class="dot"></span>{{ p.platform }}</span>
       {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>
       {% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
-      {% if p.author_is_verified %}<span title="verified">✓</span>{% endif %}
+      {% if p.author_is_verified %}<span title="verified" style="color:var(--accent-intel);">✓</span>{% endif %}
     </div>
 
-    {# Media: videos first (playable), then images #}
     {% if p.videos %}
       {% for v in p.videos %}
-      <video controls preload="none" style="width:100%; border-radius:8px; max-height:320px; background:#000;"
-             {% if v.thumb_src %}poster="{{ v.thumb_src }}"{% endif %} src="{{ v.src }}"></video>
+      <video controls preload="none" {% if v.thumb_src %}poster="{{ v.thumb_src }}"{% endif %} src="{{ v.src }}" style="max-height:320px; background:#000;"></video>
       {% endfor %}
     {% endif %}
     {% if p.images %}
     <div style="display:grid; grid-template-columns:repeat({{ 2 if p.images|length > 1 else 1 }},1fr); gap:6px;">
       {% for img in p.images %}
-      <a href="{{ img.src }}" target="_blank"><img src="{{ img.src }}" alt="{{ img.alt_text or '' }}"
-         style="width:100%; height:160px; object-fit:cover; border-radius:8px; border:1px solid var(--border);"></a>
+      <a href="{{ img.src }}" target="_blank"><img class="post-img" src="{{ img.src }}" alt="{{ img.alt_text or '' }}"></a>
       {% endfor %}
     </div>
     {% endif %}
 
-    {% if p.text %}<div style="font-size:14px; line-height:1.45;">{{ p.text[:280] }}{% if p.text|length > 280 %}…{% endif %}</div>{% endif %}
+    {% if p.text %}<div style="font-size:14px; line-height:1.5;">{{ p.text[:280] }}{% if p.text|length > 280 %}…{% endif %}</div>{% endif %}
 
-    {# Engagement #}
-    <div class="muted" style="font-size:13px; display:flex; gap:14px; flex-wrap:wrap;">
+    <div class="engagement">
       <span>❤ {{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</span>
       <span>💬 {{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</span>
       {% if p.shares is not none %}<span>↻ {{ '{:,}'.format(p.shares) }}</span>{% endif %}
       {% if p.views is not none %}<span>👁 {{ '{:,}'.format(p.views) }}</span>{% endif %}
       {% if p.location_name %}<span>📍 {{ p.location_name }}</span>{% endif %}
-      {% if p.timestamp %}<span title="when posted">🕒 {{ p.timestamp[:10] }}</span>
-      {% else %}<span class="muted" title="scraped time (no post date available)" style="opacity:.6;">🕒 ~{{ (p.scraped_at or p.created_at or '')[:10] }}</span>{% endif %}
+      {% if p.timestamp %}<span>🕒 {{ p.timestamp[:10] }}</span>
+      {% else %}<span style="opacity:.55;">🕒 ~{{ (p.scraped_at or p.created_at or '')[:10] }}</span>{% endif %}
     </div>
 
-    {# Keyword classification #}
-    {% if p.keywords %}
-    <div>{% for kw in p.keywords %}<a href="{{ url_for('posts', keyword=kw) }}" class="pill" style="text-decoration:none;">🔑 {{ kw }}</a>{% endfor %}</div>
-    {% endif %}
-    {% if p.hashtags %}
-    <div>{% for t in p.hashtags[:6] %}<span class="pill">#{{ t }}</span>{% endfor %}</div>
-    {% endif %}
+    {% if p.keywords %}<div>{% for kw in p.keywords %}<a href="{{ url_for('posts', keyword=kw) }}" class="chip">🔑 {{ kw }}</a> {% endfor %}</div>{% endif %}
+    {% if p.hashtags %}<div>{% for t in p.hashtags[:6] %}<span class="chip neutral">#{{ t }}</span> {% endfor %}</div>{% endif %}
 
-    {# Sample comments #}
     {% if p.comments %}
     <details>
-      <summary class="muted" style="font-size:13px; cursor:pointer;">{{ p.comments|length }} sampled comments</summary>
+      <summary class="micro" style="cursor:pointer;">{{ p.comments|length }} sampled comments</summary>
       <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto;">
         {% for c in p.comments[:20] %}
-        <div style="font-size:13px; border-left:2px solid var(--border); padding-left:8px;">
+        <div style="font-size:13px; border-left:2px solid var(--border-strong); padding-left:8px;">
           {% if c.author_username %}<span class="mono muted">@{{ c.author_username }}</span>{% elif c.author_display_name %}<span class="muted">{{ c.author_display_name }}</span>{% endif %}
           {{ c.text[:160] }}
         </div>
@@ -90,10 +79,8 @@
     </details>
     {% endif %}
 
-    {% if p.post_url %}
-    <a href="{{ p.post_url }}" target="_blank" rel="noopener"
-       style="font-size:13px; font-weight:600; display:inline-block; margin-top:2px;">🔗 open post on {{ p.platform }} →</a>
-    {% else %}<span class="muted" style="font-size:12px;">no permalink available</span>{% endif %}
+    {% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener" style="font-size:13px; font-weight:600; font-family:var(--font-mono);">🔗 open post on {{ p.platform }} →</a>
+    {% else %}<span class="muted micro">no permalink available</span>{% endif %}
   </div>
   {% endfor %}
 </div>

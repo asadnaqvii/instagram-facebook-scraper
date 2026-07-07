@@ -1,22 +1,21 @@
 {% extends "base.html" %}
 {% block title %}Job {{ job.id }} · meta_osint{% endblock %}
 {% block body %}
-<h2>Scrape job <span class="mono">{{ job.id }}</span> — <span id="status">{{ job.status }}</span></h2>
+<h1>Scrape job <span class="mono" style="font-size:20px; color:var(--fg-2);">{{ job.id }}</span> — <span id="status" class="mono">{{ job.status }}</span></h1>
 {% if job.keywords %}
-<p style="font-size:14px;">Queued <strong>{{ job.keywords|length }}</strong> keyword{{ 's' if job.keywords|length != 1 }}:
-  {% for kw in job.keywords %}<span class="pill">{{ kw }}</span>{% endfor %}
+<p style="font-size:14px; margin-top:var(--sp-3);">Queued <strong>{{ job.keywords|length }}</strong> keyword{{ 's' if job.keywords|length != 1 }}:
+  {% for kw in job.keywords %}<span class="kw">{{ kw }}</span> {% endfor %}
 </p>
 {% endif %}
-<p id="hint" class="muted" style="font-size:13px;">A scrape takes ~30–90s per keyword (search → posts → media → comments), processed one at a time. Live log below:</p>
-<pre id="log" class="mono" style="background:#0d1117;border:1px solid var(--border);border-radius:8px;padding:16px;max-height:480px;overflow:auto;">{% for line in job.log %}{{ line }}
+<p id="hint" class="muted micro" style="margin:var(--sp-3) 0;">A scrape takes ~30–90s per keyword (search → posts → media → comments), processed one at a time. Live log below:</p>
+<pre id="log" class="mono" style="background:var(--bg-surface-1); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-4); max-height:480px; overflow:auto; font-size:12px; line-height:1.6;">{% for line in job.log %}{{ line }}
 {% endfor %}</pre>
-<div id="done-actions" style="display:none; margin-top:12px; gap:10px;">
+<div id="done-actions" style="display:none; margin-top:var(--sp-4); gap:var(--sp-3); align-items:center;">
   <a href="{{ url_for('index') }}"><button>View results on dashboard →</button></a>
-  <a href="{{ url_for('scrape') }}" style="margin-left:10px;">Run another scrape</a>
+  <a href="{{ url_for('scrape') }}" style="margin-left:var(--sp-3);">Run another scrape</a>
 </div>
+
 <script>
-// This page has its OWN live poller, so turn off the global page auto-refresh
-// (a full reload would restart this poller and make it look frozen).
 localStorage.setItem('meta_osint_autorefresh', '0');
 const _t = document.getElementById('autorefresh-toggle'); if (_t) _t.checked = false;
 
@@ -25,6 +24,9 @@ const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const hintEl = document.getElementById('hint');
 const doneEl = document.getElementById('done-actions');
+function setStatusClass(s) {
+  statusEl.className = 'mono ' + (s === 'done' ? 'status-done' : s === 'error' ? 'status-err' : 'status-run');
+}
 async function poll() {
   try {
     const r = await fetch(`/api/job/${jobId}`);
@@ -32,16 +34,14 @@ async function poll() {
       const j = await r.json();
       const running = (j.status === 'running' || j.status === 'queued');
       statusEl.textContent = j.status + (running ? ' ⏳' : j.status === 'done' ? ' ✅' : ' ⚠️');
+      setStatusClass(j.status);
       logEl.textContent = (j.log || []).join('\n') || 'starting…';
-      logEl.scrollTop = logEl.scrollHeight;   // keep newest line in view
+      logEl.scrollTop = logEl.scrollHeight;
       if (running) { hintEl.style.display = ''; setTimeout(poll, 1500); return; }
-      // Finished (done or error): stop polling, show next-step buttons.
       hintEl.style.display = 'none';
       doneEl.style.display = 'flex';
       if (j.status === 'error' && j.error) logEl.textContent += '\n\nERROR: ' + j.error;
-      if (j.status === 'done' && j.result) {
-        logEl.textContent += '\n\n— DB totals: ' + JSON.stringify(j.result.db_stats);
-      }
+      if (j.status === 'done' && j.result) logEl.textContent += '\n\n— DB totals: ' + JSON.stringify(j.result.db_stats);
     }
   } catch (e) { setTimeout(poll, 2000); return; }
 }

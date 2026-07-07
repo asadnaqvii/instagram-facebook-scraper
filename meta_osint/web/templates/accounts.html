@@ -1,27 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Accounts · meta_osint{% endblock %}
 {% block body %}
-<h2>Accounts</h2>
-<form method="get" style="margin-bottom:16px;">
-  <select name="platform" onchange="this.form.submit()"><option value="">All platforms</option>
+<div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5);">
+  <h1>Accounts</h1>
+  {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
+  <span class="micro">{{ accounts|length }} total</span>
+</div>
+<form method="get" style="margin-bottom:var(--sp-5);">
+  <select name="platform" onchange="this.form.submit()">
+    <option value="">All platforms</option>
     <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
-    <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option></select>
+    <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option>
+  </select>
 </form>
 {% if accounts %}
+<div class="card" style="padding:0; overflow:hidden;">
 <table>
-  <tr><th></th><th>Platform</th><th>Username</th><th>Name</th><th>Followers</th><th>Posts</th><th>Verified</th><th>Bio</th></tr>
+  <tr><th></th><th>Platform</th><th>Username</th><th>Name</th><th>Followers</th><th>Posts</th><th>✓</th><th>Bio</th></tr>
   {% for a in accounts %}
   <tr>
-    <td>{% if a.profile_picture_url %}<img class="thumb" style="border-radius:50%;width:40px;height:40px;" src="{{ a.profile_picture_url }}">{% endif %}</td>
-    <td><span class="badge {{ a.platform }}">{{ a.platform }}</span></td>
+    <td>{% if a.profile_picture_url %}<img class="thumb" style="width:40px;height:40px;border-radius:50%;" src="{{ a.profile_picture_url }}">{% endif %}</td>
+    <td><span class="badge {{ a.platform }}"><span class="dot"></span>{{ a.platform }}</span></td>
     <td><a href="{{ a.profile_url }}" target="_blank" class="mono">@{{ a.username }}</a></td>
     <td>{{ a.display_name or '—' }}</td>
-    <td>{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>
-    <td>{{ a.post_count or '—' }}</td>
+    <td class="mono">{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>
+    <td class="mono">{{ a.post_count or '—' }}</td>
     <td>{{ '✓' if a.is_verified else '' }}</td>
-    <td style="max-width:320px;">{{ (a.bio or '')[:120] }}</td>
+    <td style="max-width:320px;" class="muted">{{ (a.bio or '')[:120] }}</td>
   </tr>
   {% endfor %}
 </table>
+</div>
 {% else %}<p class="muted">No accounts yet.</p>{% endif %}
 {% endblock %}
