@@ -293,10 +293,12 @@ async def extract_comments(
 ) -> list[Comment]:
     """Sample comments from a post view. IG's comment DOM is volatile, so this
     anchors on commenter profile links and stays best-effort."""
-    # Scroll the comments region so more load (IG lazy-loads them).
-    for _ in range(3):
+    # Scroll the comments region so more load (IG lazy-loads them). Keep this
+    # gentle — each scroll can fetch more comments from IG, which adds to the
+    # request rate, so fewer + slower scrolls here reduce 429 risk.
+    for _ in range(2):
         await page.evaluate("window.scrollBy(0, 500)")
-        await page.wait_for_timeout(900)
+        await page.wait_for_timeout(1400)
 
     # IG dropped the old <ul>/<li> comment markup for a div-based structure, so
     # a fixed selector is unreliable. Instead we anchor on each commenter's
@@ -552,7 +554,10 @@ async def search_keyword(
             result.finished_at = now_iso()
             return result
         if await check_login(page):
-            links = await collect_post_links(page, max_posts)
+            # Cap IG posts-per-keyword so each keyword is a smaller burst.
+            ig_cap = config.IG_MAX_POSTS_CAP or max_posts
+            links = await collect_post_links(page, min(max_posts, ig_cap))
+            import random as _rnd
             for i, link in enumerate(links):
                 # Delta scraping: a post we already have gets a cheap engagement
                 # refresh (metadata only, no media re-download, no comments)
@@ -576,7 +581,14 @@ async def search_keyword(
                               f"(likes={post.likes}, {len(post.comments)} comments)")
                 except Exception:
                     continue
+                # If Instagram started throttling mid-loop, stop hitting it —
+                # keep what we have rather than navigating into more 429s.
+                if await detect_and_handle_rate_limit(page, "instagram", progress):
+                    result.error = "rate_limited_partial"
+                    break
+                # Real cooldown between post navigations (the main 429 trigger).
                 await human_delay("action", "instagram")
+                await asyncio.sleep(config.IG_PER_POST_COOLDOWN_S * _rnd.uniform(1.0, 1.5))
     except Exception as e:  # noqa: BLE001
         if not result.error:
             result.error = f"hashtag_feed_failed: {e}"

@@ -61,7 +61,16 @@ MAX_SCROLL_DELAY_S = float(os.getenv("MAX_SCROLL_DELAY_S", "4.0"))
 # Instagram throttles (HTTP 429) far more readily than Facebook, so pace it
 # slower. All IG delays are multiplied by this. Raise it if you keep hitting
 # 429s; lower it (toward 1.0) if you want more speed and fewer 429 worries.
-IG_DELAY_MULTIPLIER = float(os.getenv("IG_DELAY_MULTIPLIER", "1.6"))
+IG_DELAY_MULTIPLIER = float(os.getenv("IG_DELAY_MULTIPLIER", "2.2"))
+
+# Extra cooldown between opening each Instagram post. Opening a post is a full
+# page navigation — the main 429 trigger — so a real pause here (on top of the
+# per-action delay) matters most. Randomised up to +50%.
+IG_PER_POST_COOLDOWN_S = float(os.getenv("IG_PER_POST_COOLDOWN_S", "4.0"))
+
+# Cap IG posts-per-keyword lower than the global default, so each keyword is a
+# smaller burst. Set to 0 to use the requested max_posts unchanged.
+IG_MAX_POSTS_CAP = int(os.getenv("IG_MAX_POSTS_CAP", "8"))
 
 # When a 429 (rate limit) is detected, pause this long before continuing.
 # Doubles on repeated hits (capped). This is what stops the scraper from
