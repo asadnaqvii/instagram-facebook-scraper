@@ -28,15 +28,19 @@
       </a>
     </div>
 
-    <a id="scrape-badge" href="#" style="margin-left:auto; display:none; align-items:center; gap:6px;
-        background:var(--accent-intel-tint); border:1px solid var(--accent-intel); color:var(--accent-intel);
-        border-radius:var(--r-pill); padding:3px 12px; font-size:12px; font-family:var(--font-mono); text-decoration:none;">
-      <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-intel);display:inline-block;
-            animation:pulse 1.2s ease-in-out infinite;"></span>
-      <span id="scrape-badge-text">scraping…</span>
-    </a>
+    <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+      <a id="scrape-badge" href="#" style="display:none; align-items:center; gap:6px;
+          background:var(--accent-intel-tint); border:1px solid var(--accent-intel); color:var(--accent-intel);
+          border-radius:var(--r-pill); padding:3px 12px; font-size:12px; font-family:var(--font-mono); text-decoration:none;">
+        <span style="width:8px;height:8px;border-radius:50%;background:var(--accent-intel);display:inline-block;
+              animation:pulse 1.2s ease-in-out infinite;"></span>
+        <span id="scrape-badge-text">scraping…</span>
+      </a>
+      <button id="stop-all-btn" class="btn-danger" style="display:none; padding:4px 10px; font-family:var(--font-mono); font-size:12px;"
+              title="Stop the running scrape">■ stop</button>
+    </div>
     <button id="theme-toggle" class="btn-ghost" title="Toggle light / dark"
-            style="margin-left:auto; padding:5px 10px; font-family:var(--font-mono); font-size:12px;">◐ theme</button>
+            style="padding:5px 10px; font-family:var(--font-mono); font-size:12px;">◐ theme</button>
     <label style="color:var(--fg-2); font-size:12px; font-family:var(--font-mono);
                   display:flex; align-items:center; gap:6px; cursor:pointer; margin-left:16px;">
       <input type="checkbox" id="autorefresh-toggle"> auto-refresh
@@ -122,11 +126,18 @@
     poll();
   })();
 
-  // Header "scraping…" badge — polls for active jobs every 3s so you always
-  // know a scrape is running, even after navigating away from its job page.
+  // Header "scraping…" badge + stop button — polls for active jobs every 3s
+  // so you always know a scrape is running (and can stop it) from any page.
   (function () {
     const badge = document.getElementById('scrape-badge');
     const badgeText = document.getElementById('scrape-badge-text');
+    const stopAll = document.getElementById('stop-all-btn');
+
+    stopAll.addEventListener('click', async () => {
+      stopAll.disabled = true; stopAll.textContent = '■ stopping…';
+      try { await fetch('/api/jobs/stop-all', { method: 'POST' }); } catch (e) {}
+    });
+
     async function checkJobs() {
       try {
         const r = await fetch('/api/jobs/active');
@@ -140,8 +151,11 @@
               : `scraping${kw ? ' ' + kw : ''}…`;
             badge.href = '/job/' + job.id;
             badge.style.display = 'flex';
+            stopAll.style.display = 'inline-flex';
           } else {
             badge.style.display = 'none';
+            stopAll.style.display = 'none';
+            stopAll.disabled = false; stopAll.textContent = '■ stop';
           }
         }
       } catch (e) { /* ignore */ }

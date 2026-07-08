@@ -39,9 +39,13 @@ def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
     def progress(msg: str) -> None:
         lines.append(msg)
 
+    def should_stop() -> bool:
+        return JOBS.get(job_id, {}).get("cancel", False)
+
     try:
-        result = run_sync(cfg, progress)
-        JOBS[job_id]["status"] = "done"
+        result = run_sync(cfg, progress, should_stop)
+        # If the user hit stop, mark it 'stopped' rather than 'done'.
+        JOBS[job_id]["status"] = "stopped" if JOBS[job_id].get("cancel") else "done"
         JOBS[job_id]["result"] = result
     except Exception as e:  # noqa: BLE001
         JOBS[job_id]["status"] = "error"
@@ -171,6 +175,29 @@ def create_app() -> Flask:
         if not job:
             return jsonify({"error": "not found"}), 404
         return jsonify(job)
+
+    @app.route("/api/job/<job_id>/stop", methods=["POST"])
+    def api_job_stop(job_id):
+        """Request a graceful stop: the scrape finishes the keyword it's on,
+        then skips the rest. (Cooperative — avoids killing the browser
+        mid-navigation.)"""
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "not found"}), 404
+        if job.get("status") in ("queued", "running"):
+            job["cancel"] = True
+            job.setdefault("log", []).append("[stop requested — finishing current keyword, then stopping…]")
+            return jsonify({"ok": True, "status": "stopping"})
+        return jsonify({"ok": False, "status": job.get("status")})
+
+    @app.route("/api/jobs/stop-all", methods=["POST"])
+    def api_jobs_stop_all():
+        n = 0
+        for j in JOBS.values():
+            if j.get("status") in ("queued", "running"):
+                j["cancel"] = True
+                n += 1
+        return jsonify({"ok": True, "stopping": n})
 
     @app.route("/api/jobs/active")
     def api_jobs_active():

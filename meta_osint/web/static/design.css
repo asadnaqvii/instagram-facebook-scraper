@@ -281,6 +281,8 @@ button, .btn {
 button:hover, .btn:hover { filter: brightness(1.1); text-decoration:none; }
 .btn-secondary { background: var(--bg-surface-2); color: var(--fg-1); border:1px solid var(--border-strong); }
 .btn-ghost { background: transparent; color: var(--fg-1); border:1px solid var(--border-default); }
+.btn-danger { background: var(--threat-critical); color:#fff; border:1px solid transparent; }
+.btn-danger:disabled { opacity:.6; cursor:default; filter:none; }
 
 /* ---------- Inputs ---------- */
 input, select, textarea {

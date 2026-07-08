@@ -28,6 +28,11 @@ from .scraper import instagram as ig
 from .scraper import media as media_mod
 
 ProgressFn = Callable[[str], None]
+StopFn = Callable[[], bool]   # returns True when the user asked to stop
+
+
+def _stopped(should_stop: Optional[StopFn]) -> bool:
+    return bool(should_stop and should_stop())
 
 
 @dataclass
@@ -79,9 +84,12 @@ async def scrape_platform(
     db: PostDatabase,
     healer: SelectorHealer,
     progress: Optional[ProgressFn] = None,
+    should_stop: Optional[StopFn] = None,
 ) -> list[dict]:
     """Run every keyword for one platform on a single CDP connection."""
     summaries: list[dict] = []
+    if _stopped(should_stop):
+        return summaries
     try:
         manager = await BrowserManager(platform).start()
     except CDPConnectionError as e:
@@ -110,6 +118,9 @@ async def scrape_platform(
         known_urls = db.known_post_urls(platform)
 
         for kw in cfg.keywords:
+            if _stopped(should_stop):
+                _log(progress, f"[{platform}] stopped by user — {len(summaries)} keyword(s) done, remaining skipped")
+                break
             _log(progress, f"[{platform}] {cfg.mode}: {kw!r} ...")
             run_id = db.start_run(kw, platform, _now_iso())
             result = None
@@ -172,7 +183,8 @@ async def scrape_platform(
     return summaries
 
 
-async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None) -> dict:
+async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
+              should_stop: Optional[StopFn] = None) -> dict:
     """Top-level: scrape all keywords across all requested platforms.
 
     Platforms run CONCURRENTLY — Instagram and Facebook are independent CDP
@@ -180,6 +192,10 @@ async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None) -> dict:
     with no added detection risk (each platform stays human-paced internally).
     Each platform uses its own SQLite connection; WAL mode handles the
     concurrent writers safely.
+
+    `should_stop` is a callback checked at each keyword boundary; when it
+    returns True the run winds down gracefully (finishes the current keyword,
+    skips the rest) rather than hard-killing mid-navigation.
     """
     store = SelectorStore()
     client = OllamaClient()
@@ -198,7 +214,7 @@ async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None) -> dict:
     # Fan out: one task per platform, each with its own DB connection.
     async def _platform_task(platform: str) -> list[dict]:
         with PostDatabase(config.DB_PATH) as db:
-            return await scrape_platform(platform, cfg, db, healer, progress)
+            return await scrape_platform(platform, cfg, db, healer, progress, should_stop)
 
     results = await asyncio.gather(
         *(_platform_task(p) for p in platforms), return_exceptions=True
@@ -218,8 +234,9 @@ async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None) -> dict:
     return {"summaries": all_summaries, "db_stats": stats}
 
 
-def run_sync(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None) -> dict:
-    return asyncio.run(run(cfg, progress))
+def run_sync(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
+             should_stop: Optional[StopFn] = None) -> dict:
+    return asyncio.run(run(cfg, progress, should_stop))
 
 
 def _now_iso() -> str:

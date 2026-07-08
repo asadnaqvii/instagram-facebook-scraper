@@ -1,7 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Job {{ job.id }} · meta_osint{% endblock %}
+{% block title %}Job {{ job.id }} · Strat-Watch Meta{% endblock %}
 {% block body %}
-<h1>Scrape job <span class="mono" style="font-size:20px; color:var(--fg-2);">{{ job.id }}</span> — <span id="status" class="mono">{{ job.status }}</span></h1>
+<div style="display:flex; align-items:center; justify-content:space-between; gap:var(--sp-4); flex-wrap:wrap;">
+  <h1>Scrape job <span class="mono" style="font-size:20px; color:var(--fg-2);">{{ job.id }}</span> — <span id="status" class="mono">{{ job.status }}</span></h1>
+  <button id="stop-btn" class="btn-danger" style="display:none;">■ Stop scrape</button>
+</div>
 {% if job.keywords %}
 <p style="font-size:14px; margin-top:var(--sp-3);">Queued <strong>{{ job.keywords|length }}</strong> keyword{{ 's' if job.keywords|length != 1 }}:
   {% for kw in job.keywords %}<span class="kw">{{ kw }}</span> {% endfor %}
@@ -24,8 +27,16 @@ const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
 const hintEl = document.getElementById('hint');
 const doneEl = document.getElementById('done-actions');
+const stopBtn = document.getElementById('stop-btn');
+
+stopBtn.addEventListener('click', async () => {
+  stopBtn.disabled = true;
+  stopBtn.textContent = '■ stopping…';
+  try { await fetch(`/api/job/${jobId}/stop`, { method: 'POST' }); } catch (e) {}
+});
+
 function setStatusClass(s) {
-  statusEl.className = 'mono ' + (s === 'done' ? 'status-done' : s === 'error' ? 'status-err' : 'status-run');
+  statusEl.className = 'mono ' + (s === 'done' ? 'status-done' : (s === 'error' || s === 'stopped') ? 'status-err' : 'status-run');
 }
 async function poll() {
   try {
@@ -33,15 +44,19 @@ async function poll() {
     if (r.ok) {
       const j = await r.json();
       const running = (j.status === 'running' || j.status === 'queued');
-      statusEl.textContent = j.status + (running ? ' ⏳' : j.status === 'done' ? ' ✅' : ' ⚠️');
+      const icon = running ? ' ⏳' : j.status === 'done' ? ' ✅' : j.status === 'stopped' ? ' ⏹' : ' ⚠️';
+      statusEl.textContent = j.status + icon;
       setStatusClass(j.status);
       logEl.textContent = (j.log || []).join('\n') || 'starting…';
       logEl.scrollTop = logEl.scrollHeight;
+      // Show the stop button only while running and not already cancelling.
+      stopBtn.style.display = running ? 'inline-flex' : 'none';
+      if (j.cancel && running) { stopBtn.disabled = true; stopBtn.textContent = '■ stopping…'; }
       if (running) { hintEl.style.display = ''; setTimeout(poll, 1500); return; }
       hintEl.style.display = 'none';
       doneEl.style.display = 'flex';
       if (j.status === 'error' && j.error) logEl.textContent += '\n\nERROR: ' + j.error;
-      if (j.status === 'done' && j.result) logEl.textContent += '\n\n— DB totals: ' + JSON.stringify(j.result.db_stats);
+      if (j.result) logEl.textContent += '\n\n— DB totals: ' + JSON.stringify(j.result.db_stats);
     }
   } catch (e) { setTimeout(poll, 2000); return; }
 }
