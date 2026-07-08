@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Login · {{ platform }}{% endblock %}
+{% block body %}
+<h1 style="margin-bottom:var(--sp-4);">{{ platform|capitalize }} login</h1>
+
+{% if opened %}
+<div class="card" style="max-width:640px;">
+  <p style="font-size:15px;">✅ Opened <strong>{{ platform|capitalize }}</strong>'s login page in its Chrome window
+     ({{ 'port 9223' if platform == 'instagram' else 'port 9222' }}).</p>
+  <p class="muted" style="margin-top:var(--sp-3);">
+    Switch to that Chrome window to:
+  </p>
+  <ul class="muted" style="margin-top:var(--sp-2); line-height:1.8;">
+    <li>log out and sign in with a different account, or</li>
+    <li>log back in if your session expired.</li>
+  </ul>
+  <p class="muted" style="margin-top:var(--sp-3);">
+    When you're done, the status pill in the top bar will update within ~30s
+    (or reload this page).
+  </p>
+  <div style="margin-top:var(--sp-5); display:flex; gap:var(--sp-3);">
+    <a href="{{ url_for('index') }}"><button>← Back to dashboard</button></a>
+    <a href="{{ url_for('login_action', platform=platform) }}" class="btn-secondary" style="text-decoration:none;">Re-open login page</a>
+  </div>
+</div>
+{% else %}
+<div class="card" style="max-width:640px; border-color:var(--threat-critical);">
+  <p style="font-size:15px;">⚠️ Couldn't open {{ platform|capitalize }}'s Chrome window.</p>
+  <p class="muted" style="margin-top:var(--sp-3);">
+    Its Chrome isn't running. Launch it first:
+  </p>
+  <pre class="mono" style="background:var(--bg-surface-2); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-3); margin-top:var(--sp-3);">meta_osint\scripts\start_chrome_{{ platform }}.bat</pre>
+  {% if error %}<p class="muted micro" style="margin-top:var(--sp-3);">Details: {{ error[:200] }}</p>{% endif %}
+  <div style="margin-top:var(--sp-4);"><a href="{{ url_for('index') }}"><button>← Back to dashboard</button></a></div>
+</div>
+{% endif %}
+{% endblock %}

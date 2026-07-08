@@ -178,8 +178,9 @@ h3 { font-family: var(--font-body); font-weight:600; font-size:18px; line-height
   font-family: var(--font-mono); font-size:12px; font-weight:500; color: var(--fg-2);
   padding:3px 9px; border-radius: var(--r-pill);
   background: var(--bg-surface-2); border:1px solid var(--border-default);
-  cursor: default;
+  cursor: pointer; text-decoration: none;
 }
+.login-pill:hover { filter: brightness(1.15); text-decoration: none; }
 .login-pill .login-dot { width:8px; height:8px; border-radius:50%; background: var(--fg-3); transition: background var(--dur) var(--ease); }
 .login-pill.ok   { border-color: rgba(63,185,80,0.4); color: var(--threat-low); }
 .login-pill.ok   .login-dot { background: var(--threat-low); }

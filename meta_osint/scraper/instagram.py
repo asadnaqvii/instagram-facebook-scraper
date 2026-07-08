@@ -49,6 +49,11 @@ from .helpers import (
 
 IG = "https://www.instagram.com"
 
+# The logged-in account's own username, captured once per session. Used to
+# exclude the user's OWN profile links (nav / "Also from Meta" chrome) from
+# scraped comments — otherwise every post shows a bogus self-comment.
+_SELF_USERNAME: dict[str, str | None] = {"ig": None}
+
 
 # ── login check ──────────────────────────────────────────────────────
 
@@ -57,9 +62,26 @@ async def check_login(page: Page) -> bool:
     if "/accounts/login" in url or "/challenge/" in url:
         return False
     try:
-        return await page.locator("article, header section, main, nav").first.is_visible(timeout=4000)
+        visible = await page.locator("article, header section, main, nav").first.is_visible(timeout=4000)
     except Exception:
         return "/accounts/login" not in url
+    # Opportunistically capture the logged-in username from the nav avatar link.
+    if visible and not _SELF_USERNAME["ig"]:
+        try:
+            uname = await page.evaluate(
+                r"""() => {
+                    for (const a of document.querySelectorAll('a[href^="/"]')) {
+                        const m = (a.getAttribute('href')||'').match(/^\/([A-Za-z0-9._]+)\/$/);
+                        if (m && a.querySelector('img')) return m[1];
+                    }
+                    return null;
+                }"""
+            )
+            if uname:
+                _SELF_USERNAME["ig"] = uname
+        except Exception:
+            pass
+    return visible
 
 
 # ── profile ──────────────────────────────────────────────────────────
@@ -284,16 +306,20 @@ async def extract_comments(
     # comment, and obvious UI noise ("N likes", "Reply", "Verified") is dropped.
     try:
         raw = await page.evaluate(
-            r"""(postAuthor) => {
+            r"""([postAuthor, selfUser]) => {
                 const out = [];
                 const seen = new Set();
-                const NAV = new Set(['reels','explore','profile','reel','direct','stories','accounts','p']);
+                const seenText = new Set();   // global dedup by text
+                const NAV = new Set(['reels','explore','profile','reel','direct','stories','accounts','p','about','privacy','terms']);
                 const isNoise = (t) => (
                     !t || t.length < 2 ||
-                    /^\d[\d,.]*\s*(likes?|views?)$/i.test(t) ||
-                    /^(Reply|Verified|Follow|Following|Profile|Reels|Like|Home|Search|Notifications|Messages|Create|More|See translation|View replies|Edited|Author|Original audio)$/i.test(t) ||
+                    /^\d[\d,.]*\s*(likes?|views?|comments?|replies)$/i.test(t) ||
+                    /^(Reply|Verified|Follow|Following|Profile|Reels|Like|Home|Search|Notifications|Messages|Create|More|See translation|Translate|View replies|View all|Hide|Edited|Author|Original audio|Suggested|for you|Follow back)$/i.test(t) ||
+                    /^More posts from/i.test(t) ||
                     /^View all \d/i.test(t) ||
-                    /^\d+[wdhms]$/.test(t)
+                    /^View \d+ (more )?(comment|repl)/i.test(t) ||
+                    /^\d+[wdhms]$/.test(t) ||
+                    /^(Liked by|Add a comment|Post)$/i.test(t)
                 );
                 const anchors = document.querySelectorAll("a[href^='/'][role='link'], a[href^='/']");
                 for (const a of anchors) {
@@ -302,6 +328,7 @@ async def extract_comments(
                     const user = href.replace(/\//g, '');
                     if (NAV.has(user)) continue;
                     if (postAuthor && user.toLowerCase() === postAuthor.toLowerCase()) continue;
+                    if (selfUser && user.toLowerCase() === selfUser.toLowerCase()) continue;  // skip logged-in user's UI links
                     let node = a;
                     for (let depth = 0; depth < 7 && node; depth++) {
                         node = node.parentElement;
@@ -312,7 +339,11 @@ async def extract_comments(
                         const comment = dirs.sort((a, b) => b.length - a.length)[0];
                         if (comment && comment.length >= 2) {
                             const key = user + '::' + comment.slice(0, 60);
-                            if (!seen.has(key)) { seen.add(key); out.push({ username: user, text: comment }); }
+                            const tkey = comment.slice(0, 80);
+                            if (!seen.has(key) && !seenText.has(tkey)) {
+                                seen.add(key); seenText.add(tkey);
+                                out.push({ username: user, text: comment });
+                            }
                             break;
                         }
                     }
@@ -320,7 +351,7 @@ async def extract_comments(
                 }
                 return out;
             }""",
-            post_author,
+            [post_author, _SELF_USERNAME.get("ig")],
         )
     except Exception:
         raw = []

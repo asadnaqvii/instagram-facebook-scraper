@@ -19,12 +19,12 @@
     <span class="brand"><span class="mark">◆</span> Strat-Watch Meta <span class="micro" style="color:var(--fg-3);">OSINT · IG / FB</span></span>
 
     <div id="login-status" style="display:flex; gap:10px; margin-left:var(--sp-5);">
-      <span class="login-pill" data-platform="instagram" title="checking Instagram…">
+      <a class="login-pill" href="{{ url_for('login_action', platform='instagram') }}" data-platform="instagram" title="checking Instagram… (click to log in / switch account)">
         <span class="login-dot" style="background:var(--fg-3);"></span> IG
-      </span>
-      <span class="login-pill" data-platform="facebook" title="checking Facebook…">
+      </a>
+      <a class="login-pill" href="{{ url_for('login_action', platform='facebook') }}" data-platform="facebook" title="checking Facebook… (click to log in / switch account)">
         <span class="login-dot" style="background:var(--fg-3);"></span> FB
-      </span>
+      </a>
     </div>
 
     <a id="scrape-badge" href="#" style="margin-left:auto; display:none; align-items:center; gap:6px;
@@ -79,17 +79,25 @@
     function apply(platform, info) {
       const pill = pills[platform]; if (!pill) return;
       pill.classList.remove('ok', 'warn', 'down');
-      let cls, title, label = platform === 'instagram' ? 'IG' : 'FB';
-      if (!info) { cls=''; title='status unknown'; }
+      const short = platform === 'instagram' ? 'IG' : 'FB';
+      let cls = '', title = '', suffix = '';
+      if (!info) { title = platform + ': status unknown'; }
       else if (info.state === 'logged_in') {
-        cls='ok'; title=platform + ': logged in' + (info.username ? ' as @' + info.username : '');
-        if (info.username) label = 'IG @' + info.username;
+        cls = 'ok'; suffix = ' · in';
+        title = platform + ': logged in' + (info.username ? ' as @' + info.username : '') + ' — click to switch account / log out';
       }
-      else if (info.state === 'not_logged_in') { cls='warn'; title=platform + ': Chrome open but NOT logged in — log in in the Chrome window'; }
-      else { cls='down'; title=platform + ': Chrome not running — launch scripts/start_chrome_' + platform + '.bat'; }
+      else if (info.state === 'not_logged_in') {
+        cls = 'warn'; suffix = ' · out';
+        title = platform + ': Chrome open but NOT logged in — click to open the login page';
+      }
+      else {
+        cls = 'down'; suffix = ' · off';
+        title = platform + ': Chrome not running — launch scripts/start_chrome_' + platform + '.bat';
+      }
       if (cls) pill.classList.add(cls);
       pill.title = title;
-      pill.lastChild.textContent = ' ' + label;
+      // keep the leading dot span, replace the trailing text node
+      pill.lastChild.textContent = ' ' + short + suffix;
     }
     async function check() {
       try {

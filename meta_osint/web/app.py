@@ -202,4 +202,41 @@ def create_app() -> Flask:
         except Exception as e:  # noqa: BLE001
             return jsonify({"platforms": _STATUS_CACHE.get("data"), "error": str(e)}), 200
 
+    @app.route("/login/<platform>")
+    def login_action(platform):
+        """Point the platform's own Chrome window at its login page so the user
+        can log out / switch accounts / log back in there. The scraper never
+        handles the password itself — this just drives the browser to the page.
+        """
+        if platform not in config.PLATFORMS:
+            return redirect(url_for("index"))
+        url = ("https://www.instagram.com/accounts/login/" if platform == "instagram"
+               else "https://www.facebook.com/login/")
+        opened, err = _drive_browser_to(platform, url)
+        _STATUS_CACHE.update(ts=0.0, data=_STATUS_CACHE.get("data"))  # force re-check next poll
+        return render_template("login_action.html", platform=platform, opened=opened, error=err, target=url)
+
     return app
+
+
+def _drive_browser_to(platform: str, url: str) -> tuple[bool, str | None]:
+    """Navigate the platform's CDP Chrome to `url` (its login page)."""
+    import asyncio
+
+    async def _go():
+        from ..browser.manager import BrowserManager, CDPConnectionError
+        try:
+            async with BrowserManager(platform) as bm:
+                page = await bm.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(1)
+            return True, None
+        except CDPConnectionError as e:
+            return False, str(e)
+        except Exception as e:  # noqa: BLE001
+            return False, str(e)
+
+    try:
+        return asyncio.run(_go())
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
