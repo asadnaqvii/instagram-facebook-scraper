@@ -8,14 +8,27 @@ virenv/
 venv/
 .venv/
 
-# Runtime data (scraped content, sessions, downloaded media, DBs)
-data/
+# Runtime data (sessions, downloaded media, WAL sidecars)
 sessions/
 output/
-*.db
 *.db-wal
 *.db-shm
 meta_osint/selectors/selectors.json
+
+# Old v1 data folder at repo root — never publish.
+/data/
+
+# Login session tokens — MUST NEVER be committed, even to a private repo.
+cookies_*.txt
+meta_osint/data/cookies_*.txt
+
+# Under meta_osint/data, ignore everything EXCEPT the SQLite database.
+# The .db (posts, accounts, comments, keywords — text only) is small (~MBs)
+# and synced to GitHub so a fresh clone has your data. Media is large (GBs)
+# and stays local; it re-downloads on demand.
+meta_osint/data/*
+!meta_osint/data/meta_osint.db
+meta_osint/data/media/
 
 # Node
 node_modules/
