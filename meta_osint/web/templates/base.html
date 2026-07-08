@@ -73,7 +73,11 @@
     });
   })();
 
-  // Login status — poll each platform's live connection + login state.
+  // Connection status. The POLL is CHEAP — it only checks whether each
+  // platform's Chrome is running (a TCP port check); it does NOT navigate the
+  // browser, so nothing happens to your tabs on a timer. The deeper "am I
+  // logged in?" check drives the browser, so it runs ONLY when you click a
+  // pill (never automatically).
   (function () {
     const pills = {};
     document.querySelectorAll('.login-pill').forEach(p => pills[p.dataset.platform] = p);
@@ -91,18 +95,21 @@
         cls = 'warn'; suffix = ' · out';
         title = platform + ': Chrome open but NOT logged in — click to open the login page';
       }
+      else if (info.state === 'chrome_up') {
+        cls = 'ok'; suffix = ' · on';
+        title = platform + ': Chrome running (login not verified) — click to open its login page';
+      }
       else {
         cls = 'down'; suffix = ' · off';
         title = platform + ': Chrome not running — launch scripts/start_chrome_' + platform + '.bat';
       }
       if (cls) pill.classList.add(cls);
       pill.title = title;
-      // keep the leading dot span, replace the trailing text node
       pill.lastChild.textContent = ' ' + short + suffix;
     }
-    async function check() {
+    async function poll() {   // CHEAP: port check only, safe to repeat
       try {
-        const r = await fetch('/api/login-status');
+        const r = await fetch('/api/login-status');   // no ?deep -> no navigation
         if (r.ok) {
           const d = await r.json();
           const p = d.platforms || {};
@@ -110,9 +117,9 @@
           apply('facebook', p.facebook);
         }
       } catch (e) { /* ignore */ }
-      setTimeout(check, 30000);   // re-check every 30s
+      setTimeout(poll, 30000);
     }
-    check();
+    poll();
   })();
 
   // Header "scraping…" badge — polls for active jobs every 3s so you always

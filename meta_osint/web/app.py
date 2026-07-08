@@ -187,18 +187,33 @@ def create_app() -> Flask:
 
     @app.route("/api/login-status")
     def api_login_status():
-        """Live per-platform connection + login status. Cached briefly so
-        polling doesn't keep re-navigating the browsers. Skipped while a
-        scrape is running (the browsers are busy) — returns the last known."""
-        now = time.time()
-        scraping = any(j.get("status") in ("queued", "running") for j in JOBS.values())
-        if _STATUS_CACHE["data"] is not None and (scraping or now - _STATUS_CACHE["ts"] < _STATUS_TTL):
-            return jsonify({"platforms": _STATUS_CACHE["data"], "cached": True})
+        """Per-platform status.
+
+        Default (what the dashboard polls): a CHEAP check — is each platform's
+        Chrome running? This does NOT navigate the browser, so polling it is
+        harmless. It reports chrome_up / chrome_down only.
+
+        ?deep=1 (only on explicit user action, e.g. clicking "verify login"):
+        additionally attaches to Chrome and checks the logged-in state. This
+        drives the browser, so it is NEVER called on a timer.
+        """
+        deep = request.args.get("deep") == "1"
+        if not deep:
+            # Cheap, no browser navigation, no caching needed.
+            try:
+                from ..browser.status import get_status
+                return jsonify({"platforms": get_status(deep=False), "cached": False})
+            except Exception as e:  # noqa: BLE001
+                return jsonify({"platforms": None, "error": str(e)}), 200
+
+        # Deep check — don't run while a scrape has the browsers busy.
+        if any(j.get("status") in ("queued", "running") for j in JOBS.values()):
+            return jsonify({"platforms": _STATUS_CACHE.get("data"), "busy": True}), 200
         try:
             from ..browser.status import get_status
-            data = get_status()
-            _STATUS_CACHE.update(ts=now, data=data)
-            return jsonify({"platforms": data, "cached": False})
+            data = get_status(deep=True)
+            _STATUS_CACHE.update(ts=time.time(), data=data)
+            return jsonify({"platforms": data, "cached": False, "deep": True})
         except Exception as e:  # noqa: BLE001
             return jsonify({"platforms": _STATUS_CACHE.get("data"), "error": str(e)}), 200
 

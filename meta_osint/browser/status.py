@@ -74,21 +74,32 @@ async def _check_login(platform: str) -> tuple[bool, str | None]:
         return False, None
 
 
-async def get_status_async() -> dict:
-    """Full status for both platforms."""
+async def get_status_async(deep: bool = False) -> dict:
+    """Status for both platforms.
+
+    deep=False (default): only a cheap TCP port check — is the platform's
+      Chrome running? This does NOT touch the browser, so it can be polled
+      safely. State is 'chrome_up' or 'chrome_down'.
+
+    deep=True: additionally attach to Chrome and navigate to the site to
+      confirm the session is logged in. This DRIVES the browser, so it must
+      only run on explicit user action (never on a timer) — otherwise the
+      browser would navigate on its own repeatedly.
+    """
     out: dict = {}
     for platform in config.PLATFORMS:
         port = config.CDP_PORT_INSTAGRAM if platform == "instagram" else config.CDP_PORT_FACEBOOK
         chrome_up = _port_open(port)
-        logged_in, who = (False, None)
-        if chrome_up:
-            logged_in, who = await _check_login(platform)
+
         if not chrome_up:
-            state = "chrome_down"
-        elif logged_in:
-            state = "logged_in"
+            state, logged_in, who = "chrome_down", False, None
+        elif not deep:
+            # Cheap path: we know Chrome is up but not whether it's logged in.
+            state, logged_in, who = "chrome_up", None, None
         else:
-            state = "not_logged_in"
+            logged_in, who = await _check_login(platform)
+            state = "logged_in" if logged_in else "not_logged_in"
+
         out[platform] = {
             "platform": platform,
             "port": port,
@@ -100,6 +111,6 @@ async def get_status_async() -> dict:
     return out
 
 
-def get_status() -> dict:
+def get_status(deep: bool = False) -> dict:
     """Sync wrapper for Flask."""
-    return asyncio.run(get_status_async())
+    return asyncio.run(get_status_async(deep=deep))
