@@ -1,3 +1,4 @@
+{% import "_logos.html" as logos %}
 {% if posts %}
 <div class="card" style="padding:0; overflow:hidden;">
 <table>
@@ -9,7 +10,7 @@
       {% elif p.images and p.images[0].thumb_src %}<img class="thumb" src="{{ p.images[0].thumb_src }}" alt="">
       {% endif %}
     </td>
-    <td><span class="badge {{ p.platform }}"><span class="dot"></span>{{ p.platform }}</span></td>
+    <td><span class="badge {{ p.platform }}">{{ logos.platform(p.platform, 14) }} {{ p.platform }}</span></td>
     <td>{% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>{% else %}<span class="muted">{{ p.author_display_name or '—' }}</span>{% endif %}</td>
     <td style="max-width:340px;">{% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener">{{ (p.text or '')[:120] }}{% if (p.text or '')|length > 120 %}…{% endif %}</a>{% else %}{{ (p.text or '')[:120] }}{% endif %}</td>
     <td class="mono">{{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</td>

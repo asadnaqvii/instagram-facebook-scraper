@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Accounts · meta_osint{% endblock %}
+{% import "_logos.html" as logos %}
+{% block title %}Accounts · Strat-Watch Meta{% endblock %}
 {% block body %}
 <div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5);">
   <h1>Accounts</h1>
@@ -20,7 +21,7 @@
   {% for a in accounts %}
   <tr>
     <td>{% if a.profile_picture_url %}<img class="thumb" style="width:40px;height:40px;border-radius:50%;" src="{{ a.profile_picture_url }}">{% endif %}</td>
-    <td><span class="badge {{ a.platform }}"><span class="dot"></span>{{ a.platform }}</span></td>
+    <td><span class="badge {{ a.platform }}">{{ logos.platform(a.platform, 14) }} {{ a.platform }}</span></td>
     <td><a href="{{ a.profile_url }}" target="_blank" class="mono">@{{ a.username }}</a></td>
     <td>{{ a.display_name or '—' }}</td>
     <td class="mono">{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>

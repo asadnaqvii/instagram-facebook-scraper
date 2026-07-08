@@ -1,10 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Posts · meta_osint{% endblock %}
+{% import "_logos.html" as logos %}
+{% block title %}Posts · Strat-Watch Meta{% endblock %}
 {% block body %}
 <div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
   <h1>Posts</h1>
   {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
-  {% if platform %}<span class="badge {{ platform }}"><span class="dot"></span>{{ platform }}</span>{% endif %}
+  {% if platform %}<span class="badge {{ platform }}">{{ logos.platform(platform, 14) }} {{ platform }}</span>{% endif %}
   <span class="micro">{{ posts|length }} results</span>
 </div>
 
@@ -31,7 +32,7 @@
   {% for p in posts %}
   <div class="card post-card">
     <div style="display:flex; align-items:center; gap:8px;">
-      <span class="badge {{ p.platform }}"><span class="dot"></span>{{ p.platform }}</span>
+      <span class="badge {{ p.platform }}">{{ logos.platform(p.platform, 14) }} {{ p.platform }}</span>
       {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>
       {% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
       {% if p.author_is_verified %}<span title="verified" style="color:var(--accent-intel);">✓</span>{% endif %}

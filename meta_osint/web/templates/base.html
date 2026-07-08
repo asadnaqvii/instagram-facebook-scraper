@@ -14,16 +14,17 @@
   </script>
 </head>
 <body>
+  {% import "_logos.html" as logos %}
   {% set path = request.path %}
   <header class="topbar">
-    <span class="brand"><span class="mark">◆</span> Strat-Watch Meta <span class="micro" style="color:var(--fg-3);">OSINT · IG / FB</span></span>
+    <span class="brand"><span class="mark" style="display:inline-flex; align-items:center;">{{ logos.meta(20) }}</span> Strat-Watch Meta <span class="micro" style="color:var(--fg-3);">OSINT · IG / FB</span></span>
 
     <div id="login-status" style="display:flex; gap:10px; margin-left:var(--sp-5);">
       <a class="login-pill" href="{{ url_for('login_action', platform='instagram') }}" data-platform="instagram" title="checking Instagram… (click to log in / switch account)">
-        <span class="login-dot" style="background:var(--fg-3);"></span> IG
+        {{ logos.instagram(15) }} <span class="login-dot" style="background:var(--fg-3);"></span> IG
       </a>
       <a class="login-pill" href="{{ url_for('login_action', platform='facebook') }}" data-platform="facebook" title="checking Facebook… (click to log in / switch account)">
-        <span class="login-dot" style="background:var(--fg-3);"></span> FB
+        {{ logos.facebook(15) }} <span class="login-dot" style="background:var(--fg-3);"></span> FB
       </a>
     </div>
 

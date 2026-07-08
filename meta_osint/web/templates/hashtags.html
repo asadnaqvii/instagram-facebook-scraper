@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Hashtags · meta_osint{% endblock %}
+{% import "_logos.html" as logos %}
+{% block title %}Hashtags · Strat-Watch Meta{% endblock %}
 {% block body %}
 <div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5);">
   <h1>Hashtags</h1><span class="micro">{{ hashtags|length }} total</span>
@@ -10,7 +11,7 @@
   <tr><th>Platform</th><th>Hashtag</th><th>Post count</th></tr>
   {% for h in hashtags %}
   <tr>
-    <td><span class="badge {{ h.platform }}"><span class="dot"></span>{{ h.platform }}</span></td>
+    <td><span class="badge {{ h.platform }}">{{ logos.platform(h.platform, 14) }} {{ h.platform }}</span></td>
     <td>{% if h.url %}<a href="{{ h.url }}" target="_blank" class="mono">#{{ h.tag }}</a>{% else %}<span class="mono">#{{ h.tag }}</span>{% endif %}</td>
     <td class="mono">{{ '{:,}'.format(h.post_count) if h.post_count else '—' }}</td>
   </tr>
