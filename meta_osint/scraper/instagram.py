@@ -22,7 +22,7 @@ from typing import Optional
 from playwright.async_api import Page
 
 from .. import config
-from ..browser.manager import human_delay, scroll_page
+from ..browser.manager import human_delay, scroll_page, detect_and_handle_rate_limit
 from ..llm.healer import SelectorHealer
 from ..models import (
     Account,
@@ -159,7 +159,7 @@ async def collect_post_links(page: Page, limit: int) -> list[str]:
             links.setdefault(full, None)
         if len(links) >= limit:
             break
-        await scroll_page(page, 1)
+        await scroll_page(page, 1, "instagram")
     return list(links.keys())[:limit]
 
 
@@ -211,7 +211,7 @@ async def extract_post(
     # 2. Navigate for DOM-only fields (caption fallback, location, comments).
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action")
+        await human_delay("action", "instagram")
     except Exception:
         return post if (post.text or post.media) else None
 
@@ -515,9 +515,16 @@ async def search_keyword(
     try:
         if "instagram.com" not in (page.url or ""):
             await page.goto(f"{IG}/", wait_until="domcontentloaded", timeout=25000)
-            await human_delay("action")
+            await human_delay("action", "instagram")
     except Exception:
         pass
+
+    # If Instagram is rate-limiting us, stop early rather than burn the whole
+    # keyword against a 429 wall (which returns empty and makes throttling worse).
+    if await detect_and_handle_rate_limit(page, "instagram", progress):
+        result.error = "rate_limited"
+        result.finished_at = now_iso()
+        return result
 
     if not await check_login(page):
         result.error = "not_logged_in"
@@ -539,7 +546,11 @@ async def search_keyword(
     tag = keyword.replace(" ", "").lstrip("#")
     try:
         await page.goto(f"{IG}/explore/tags/{tag}/", wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action")
+        await human_delay("action", "instagram")
+        if await detect_and_handle_rate_limit(page, "instagram", progress):
+            result.error = "rate_limited"
+            result.finished_at = now_iso()
+            return result
         if await check_login(page):
             links = await collect_post_links(page, max_posts)
             for i, link in enumerate(links):
@@ -565,7 +576,7 @@ async def search_keyword(
                               f"(likes={post.likes}, {len(post.comments)} comments)")
                 except Exception:
                     continue
-                await human_delay("action")
+                await human_delay("action", "instagram")
     except Exception as e:  # noqa: BLE001
         if not result.error:
             result.error = f"hashtag_feed_failed: {e}"
@@ -587,7 +598,7 @@ async def scrape_profile(
     result = SearchResult(platform=Platform.instagram, keyword=f"@{username}", started_at=now_iso())
     try:
         await page.goto(f"{IG}/{username}/", wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action")
+        await human_delay("action", "instagram")
     except Exception as e:  # noqa: BLE001
         result.error = f"nav_failed: {e}"
         result.finished_at = now_iso()
@@ -609,7 +620,7 @@ async def scrape_profile(
                 result.posts.append(post)
         except Exception:
             continue
-        await human_delay("action")
+        await human_delay("action", "instagram")
 
     result.finished_at = now_iso()
     return result
@@ -627,7 +638,7 @@ async def scrape_hashtag(
     result.hashtags.append(Hashtag(tag=tag.lower(), url=f"{IG}/explore/tags/{tag}/"))
     try:
         await page.goto(f"{IG}/explore/tags/{tag}/", wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action")
+        await human_delay("action", "instagram")
     except Exception as e:  # noqa: BLE001
         result.error = f"nav_failed: {e}"
         result.finished_at = now_iso()
@@ -646,7 +657,7 @@ async def scrape_hashtag(
                 result.posts.append(post)
         except Exception:
             continue
-        await human_delay("action")
+        await human_delay("action", "instagram")
 
     result.finished_at = now_iso()
     return result

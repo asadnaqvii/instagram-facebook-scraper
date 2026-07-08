@@ -95,19 +95,62 @@ class BrowserManager:
 # ── human-like helpers usable from any extractor ─────────────────────
 
 
-async def human_delay(kind: str = "action") -> None:
+async def human_delay(kind: str = "action", platform: str | None = None) -> None:
     if kind == "scroll":
         lo, hi = config.MIN_SCROLL_DELAY_S, config.MAX_SCROLL_DELAY_S
     else:
         lo, hi = config.MIN_ACTION_DELAY_S, config.MAX_ACTION_DELAY_S
+    # Instagram is stricter — pace it slower.
+    if platform == "instagram":
+        lo *= config.IG_DELAY_MULTIPLIER
+        hi *= config.IG_DELAY_MULTIPLIER
     await asyncio.sleep(random.uniform(lo, hi))
 
 
-async def scroll_page(page: Page, times: int) -> None:
+async def scroll_page(page: Page, times: int, platform: str | None = None) -> None:
     """Scroll down `times` steps with human-ish pauses and occasional pauses."""
     for i in range(times):
         await page.evaluate(f"window.scrollBy(0, {config.SCROLL_INCREMENT_PX})")
-        await human_delay("scroll")
+        await human_delay("scroll", platform)
         # Occasional longer pause, as a person skimming would.
         if random.random() < 0.15:
             await asyncio.sleep(random.uniform(1.0, 2.5))
+
+
+# Per-platform escalating backoff after a rate-limit hit.
+_backoff_state: dict[str, float] = {}
+
+
+async def detect_and_handle_rate_limit(page: Page, platform: str, progress=None) -> bool:
+    """Check whether the current page is a 429 / rate-limit / 'try again later'
+    wall. If so, pause (escalating backoff) and return True so the caller can
+    skip or retry. Returns False when the page looks normal.
+
+    This is what stops the scraper from making throttling worse: when Meta
+    says 'slow down', we actually stop for a while instead of hammering on.
+    """
+    try:
+        info = await page.evaluate(
+            r"""() => {
+                const t = (document.body ? document.body.innerText : '').slice(0, 400);
+                const title = document.title || '';
+                const rl = /429|too many requests|rate.?limit|please wait a few minutes|try again later|temporarily blocked|we limit how often/i;
+                return { hit: rl.test(t) || rl.test(title), url: location.href };
+            }"""
+        )
+    except Exception:
+        return False
+    if not info or not info.get("hit"):
+        _backoff_state[platform] = config.RATE_LIMIT_BACKOFF_S  # reset on healthy page
+        return False
+
+    wait = _backoff_state.get(platform, config.RATE_LIMIT_BACKOFF_S)
+    msg = f"[{platform}] RATE LIMITED (429) — backing off {int(wait)}s before continuing"
+    if progress:
+        progress(msg)
+    else:
+        print(msg)
+    await asyncio.sleep(wait)
+    # Escalate for next time, capped.
+    _backoff_state[platform] = min(wait * 2, config.RATE_LIMIT_MAX_BACKOFF_S)
+    return True

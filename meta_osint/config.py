@@ -51,10 +51,23 @@ def cdp_endpoint(platform: str) -> str:
 MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "20"))
 SCROLL_INCREMENT_PX = int(os.getenv("SCROLL_INCREMENT_PX", "800"))
 # Delays are randomised within [min, max] to look human.
-MIN_ACTION_DELAY_S = float(os.getenv("MIN_ACTION_DELAY_S", "1.2"))
-MAX_ACTION_DELAY_S = float(os.getenv("MAX_ACTION_DELAY_S", "3.0"))
-MIN_SCROLL_DELAY_S = float(os.getenv("MIN_SCROLL_DELAY_S", "1.3"))
-MAX_SCROLL_DELAY_S = float(os.getenv("MAX_SCROLL_DELAY_S", "2.8"))
+# Base delays (used for Facebook). Instagram is stricter about rate limits,
+# so it gets a multiplier (below) on top of these.
+MIN_ACTION_DELAY_S = float(os.getenv("MIN_ACTION_DELAY_S", "2.0"))
+MAX_ACTION_DELAY_S = float(os.getenv("MAX_ACTION_DELAY_S", "4.5"))
+MIN_SCROLL_DELAY_S = float(os.getenv("MIN_SCROLL_DELAY_S", "2.0"))
+MAX_SCROLL_DELAY_S = float(os.getenv("MAX_SCROLL_DELAY_S", "4.0"))
+
+# Instagram throttles (HTTP 429) far more readily than Facebook, so pace it
+# slower. All IG delays are multiplied by this. Raise it if you keep hitting
+# 429s; lower it (toward 1.0) if you want more speed and fewer 429 worries.
+IG_DELAY_MULTIPLIER = float(os.getenv("IG_DELAY_MULTIPLIER", "1.6"))
+
+# When a 429 (rate limit) is detected, pause this long before continuing.
+# Doubles on repeated hits (capped). This is what stops the scraper from
+# hammering Instagram harder when it's already asking us to slow down.
+RATE_LIMIT_BACKOFF_S = float(os.getenv("RATE_LIMIT_BACKOFF_S", "90"))
+RATE_LIMIT_MAX_BACKOFF_S = float(os.getenv("RATE_LIMIT_MAX_BACKOFF_S", "600"))
 
 # Per-post / per-comment collection caps (safety valves).
 MAX_MEDIA_PER_POST = int(os.getenv("MAX_MEDIA_PER_POST", "20"))
