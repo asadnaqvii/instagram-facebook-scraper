@@ -18,6 +18,15 @@
   <header class="topbar">
     <span class="brand"><span class="mark">◆</span> Strat-Watch Meta <span class="micro" style="color:var(--fg-3);">OSINT · IG / FB</span></span>
 
+    <div id="login-status" style="display:flex; gap:10px; margin-left:var(--sp-5);">
+      <span class="login-pill" data-platform="instagram" title="checking Instagram…">
+        <span class="login-dot" style="background:var(--fg-3);"></span> IG
+      </span>
+      <span class="login-pill" data-platform="facebook" title="checking Facebook…">
+        <span class="login-dot" style="background:var(--fg-3);"></span> FB
+      </span>
+    </div>
+
     <a id="scrape-badge" href="#" style="margin-left:auto; display:none; align-items:center; gap:6px;
         background:var(--accent-intel-tint); border:1px solid var(--accent-intel); color:var(--accent-intel);
         border-radius:var(--r-pill); padding:3px 12px; font-size:12px; font-family:var(--font-mono); text-decoration:none;">
@@ -61,6 +70,40 @@
       if (isLight) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('meta_osint_theme', 'dark'); }
       else { document.documentElement.setAttribute('data-theme', 'light'); localStorage.setItem('meta_osint_theme', 'light'); }
     });
+  })();
+
+  // Login status — poll each platform's live connection + login state.
+  (function () {
+    const pills = {};
+    document.querySelectorAll('.login-pill').forEach(p => pills[p.dataset.platform] = p);
+    function apply(platform, info) {
+      const pill = pills[platform]; if (!pill) return;
+      pill.classList.remove('ok', 'warn', 'down');
+      let cls, title, label = platform === 'instagram' ? 'IG' : 'FB';
+      if (!info) { cls=''; title='status unknown'; }
+      else if (info.state === 'logged_in') {
+        cls='ok'; title=platform + ': logged in' + (info.username ? ' as @' + info.username : '');
+        if (info.username) label = 'IG @' + info.username;
+      }
+      else if (info.state === 'not_logged_in') { cls='warn'; title=platform + ': Chrome open but NOT logged in — log in in the Chrome window'; }
+      else { cls='down'; title=platform + ': Chrome not running — launch scripts/start_chrome_' + platform + '.bat'; }
+      if (cls) pill.classList.add(cls);
+      pill.title = title;
+      pill.lastChild.textContent = ' ' + label;
+    }
+    async function check() {
+      try {
+        const r = await fetch('/api/login-status');
+        if (r.ok) {
+          const d = await r.json();
+          const p = d.platforms || {};
+          apply('instagram', p.instagram);
+          apply('facebook', p.facebook);
+        }
+      } catch (e) { /* ignore */ }
+      setTimeout(check, 30000);   // re-check every 30s
+    }
+    check();
   })();
 
   // Header "scraping…" badge — polls for active jobs every 3s so you always

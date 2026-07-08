@@ -172,6 +172,22 @@ h3 { font-family: var(--font-body); font-weight:600; font-size:18px; line-height
 }
 .container { max-width: 1280px; margin: 0 auto; }
 
+/* ---------- Login status pills (topbar) ---------- */
+.login-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  font-family: var(--font-mono); font-size:12px; font-weight:500; color: var(--fg-2);
+  padding:3px 9px; border-radius: var(--r-pill);
+  background: var(--bg-surface-2); border:1px solid var(--border-default);
+  cursor: default;
+}
+.login-pill .login-dot { width:8px; height:8px; border-radius:50%; background: var(--fg-3); transition: background var(--dur) var(--ease); }
+.login-pill.ok   { border-color: rgba(63,185,80,0.4); color: var(--threat-low); }
+.login-pill.ok   .login-dot { background: var(--threat-low); }
+.login-pill.warn { border-color: rgba(240,136,62,0.4); color: var(--threat-high); }
+.login-pill.warn .login-dot { background: var(--threat-high); }
+.login-pill.down { border-color: rgba(248,81,73,0.4); color: var(--threat-critical); }
+.login-pill.down .login-dot { background: var(--threat-critical); }
+
 /* ---------- Cards & surfaces ---------- */
 .card {
   background: var(--bg-surface-1);

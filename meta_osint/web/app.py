@@ -16,6 +16,11 @@ from .. import config
 from ..database.db import PostDatabase
 from ..orchestrator import ScrapeConfig, run_sync
 
+# Short-lived cache of the login-status check (it navigates the browsers, so
+# we don't want to re-run it on every poll). {"ts": float, "data": dict}
+_STATUS_CACHE: dict = {"ts": 0.0, "data": None}
+_STATUS_TTL = 20.0  # seconds
+
 
 def _media_name(local_path: str | None) -> str | None:
     """Basename of a downloaded media file, for the /media/<name> route."""
@@ -179,5 +184,22 @@ def create_app() -> Flask:
             if j.get("status") in ("queued", "running")
         ]
         return jsonify({"active": active, "count": len(active)})
+
+    @app.route("/api/login-status")
+    def api_login_status():
+        """Live per-platform connection + login status. Cached briefly so
+        polling doesn't keep re-navigating the browsers. Skipped while a
+        scrape is running (the browsers are busy) — returns the last known."""
+        now = time.time()
+        scraping = any(j.get("status") in ("queued", "running") for j in JOBS.values())
+        if _STATUS_CACHE["data"] is not None and (scraping or now - _STATUS_CACHE["ts"] < _STATUS_TTL):
+            return jsonify({"platforms": _STATUS_CACHE["data"], "cached": True})
+        try:
+            from ..browser.status import get_status
+            data = get_status()
+            _STATUS_CACHE.update(ts=now, data=data)
+            return jsonify({"platforms": data, "cached": False})
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"platforms": _STATUS_CACHE.get("data"), "error": str(e)}), 200
 
     return app
