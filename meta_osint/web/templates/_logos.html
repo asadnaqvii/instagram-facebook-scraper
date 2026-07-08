@@ -33,9 +33,12 @@
 </svg>
 {%- endmacro %}
 
-{% macro meta(size=18) %}
-<svg width="{{ size }}" height="{{ (size|float * 0.72)|round|int }}" viewBox="0 0 800 576" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; flex-shrink:0;" aria-label="Meta">
-  <path fill="currentColor" d="M72 60C36 60 8 132 8 216c0 92 40 176 108 176 40 0 68-28 108-96 12-20 22-40 30-56 8 16 18 36 30 56 40 68 68 96 108 96 68 0 108-84 108-176 0-84-28-156-64-156-40 0-72 44-116 128-4 8-8 16-14 26-6-10-10-18-14-26C316 104 284 60 244 60c-8 0-16 4-24 12-8-8-16-12-24-12h-124zm52 66c14 0 30 20 52 62 6 12 12 24 18 36-18 34-32 58-44 74-16 22-30 32-46 32-30 0-52-46-52-114 0-56 16-90 40-100 10-4 20-4 32 10zm400 0c12-14 22-14 32-10 24 10 40 44 40 100 0 68-22 114-52 114-16 0-30-10-46-32-12-16-26-40-44-74 6-12 12-24 18-36 22-42 38-62 52-62z"/>
+{% macro meta(size=22) %}
+{# Meta-style infinity mark, built from an overlapping double loop so it is
+   geometrically correct at any size. Meta blue. #}
+<svg width="{{ size }}" height="{{ (size|float * 0.62)|round|int }}" viewBox="0 0 40 25" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle; flex-shrink:0;" aria-label="Meta">
+  <path fill="none" stroke="#0866FF" stroke-width="5.4" stroke-linecap="round"
+        d="M20 12.5 C 14.5 3, 8 3, 8 12.5 S 14.5 22, 20 12.5 C 25.5 3, 32 3, 32 12.5 S 25.5 22, 20 12.5 Z"/>
 </svg>
 {%- endmacro %}
 
