@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_logos.html" as logos %}
+{% import "_relevancy.html" as rel %}
 {% block title %}Posts · Strat-Watch Meta{% endblock %}
 {% block body %}
 <div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
@@ -23,6 +24,7 @@
     <option value="latest" {{ 'selected' if sort=='latest' }}>Latest (best available time)</option>
     <option value="posted" {{ 'selected' if sort=='posted' }}>Newest posted</option>
     <option value="scraped" {{ 'selected' if sort=='scraped' }}>Recently scraped</option>
+    <option value="relevancy" {{ 'selected' if sort=='relevancy' }}>Most relevant to keyword</option>
   </select>
   <button>Filter</button>
 </form>
@@ -36,6 +38,7 @@
       {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>
       {% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
       {% if p.author_is_verified %}<span title="verified" style="color:var(--accent-intel);">✓</span>{% endif %}
+      <span style="margin-left:auto;">{{ rel.badge(p.relevancy) }}</span>
     </div>
 
     {% if p.videos %}

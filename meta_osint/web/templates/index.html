@@ -9,12 +9,55 @@
   <a href="{{ url_for('scrape') }}"><button>＋ New scrape</button></a>
 </div>
 
-{# Core metrics — Runs & Locations intentionally omitted #}
+{# Core metrics — Runs, Locations, Comments, Hashtags & Keywords omitted #}
 <div class="metrics">
-  {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Comments','comments'),('Media','media'),('Hashtags','hashtags'),('Keywords','keywords')] %}
+  {% for label, key in [('Posts','posts'),('Accounts','accounts'),('Media','media')] %}
   <div class="metric"><div class="val">{{ '{:,}'.format(stats[key]) }}</div><div class="lbl">{{ label }}</div></div>
   {% endfor %}
 </div>
+
+{# ── Keyword relevancy charts (above the mosaic) ── #}
+{% if keywords %}
+<div class="section-head"><h3>Keyword relevancy</h3><div class="rule"></div></div>
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); align-items:stretch;">
+
+  {# Left: ranked relevancy bars #}
+  <div class="card">
+    <div class="micro" style="margin-bottom:var(--sp-4);">Top keywords</div>
+    <div class="kw-bars">
+      {% for k in keywords[:12] %}
+      <a class="kw-bar" href="{{ url_for('keyword_detail', keyword=k.keyword) }}" title="{{ k.posts or 0 }} posts · {{ k.accounts or 0 }} accounts · {{ k.hashtags or 0 }} hashtags">
+        <span class="kw-bar-label">{{ k.keyword }}</span>
+        <span class="kw-bar-track"><span class="kw-bar-fill" style="width: {{ [k.bar_pct, 3]|max }}%;"></span></span>
+        <span class="kw-bar-val">{{ k.weight }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# Right: related keyword clusters — two dense columns to balance height #}
+  <div class="card">
+    <div class="micro" style="margin-bottom:var(--sp-4);">Related keywords · shared content</div>
+    {% if related %}
+    <div class="rel-columns">
+      {% for grp in related[:8] %}
+      <div class="rel-card">
+        <a href="{{ url_for('keyword_detail', keyword=grp.keyword) }}" class="kw" style="align-self:flex-start; text-decoration:none;">{{ grp.keyword }}</a>
+        <div class="rel-sibs">
+          {% for s in grp.related[:3] %}
+          <a href="{{ url_for('keyword_detail', keyword=s.keyword) }}" class="chip cyan" title="shares {{ s.shared }} entities with {{ grp.keyword }}">{{ s.keyword }} <span style="opacity:.6;">·{{ s.shared }}</span></a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted micro">No strongly related keywords yet — scrape more keywords to reveal topic clusters.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endif %}
 
 <div class="section-head"><h3>Keyword mosaic</h3><div class="rule"></div>
   <span class="micro">{{ keywords|length }} keywords · sized by data volume</span>

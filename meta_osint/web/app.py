@@ -15,6 +15,7 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from .. import config
 from ..database.db import PostDatabase
 from ..orchestrator import ScrapeConfig, run_sync
+from ..scraper.helpers import keyword_relevancy
 
 # Short-lived cache of the login-status check (it navigates the browsers, so
 # we don't want to re-run it on every poll). {"ts": float, "data": dict}
@@ -68,6 +69,63 @@ def _attach_media_urls(posts: list[dict]) -> list[dict]:
     return posts
 
 
+def _attach_relevancy(posts: list[dict]) -> list[dict]:
+    """Score each post's relevancy (0-100) to the keyword(s) that surfaced it.
+
+    Computed at display time from the post's own text/hashtags/author — no DB
+    change. Separates on-topic hits from keyword-coincidence noise."""
+    for p in posts:
+        p["relevancy"] = keyword_relevancy(
+            p.get("text"),
+            p.get("hashtags"),
+            p.get("author_display_name") or p.get("author_username"),
+            p.get("keywords"),
+        )
+    return posts
+
+
+def _related_keywords(db, top: int = 10, per: int = 5, min_shared: int = 2) -> list[dict]:
+    """Which keywords relate to each other, via entities they share in common
+    (result_links). Case-normalised so 'Pakistan army'/'pakistan army' merge.
+    Returns [{keyword, related: [{keyword, shared}, ...]}, ...] for the top
+    keywords by total shared-entity strength. Read-only, small data."""
+    conn = db.connect()
+    rows = conn.execute(
+        """
+        SELECT LOWER(TRIM(k1.keyword)) a, LOWER(TRIM(k2.keyword)) b, COUNT(*) shared
+        FROM result_links r1
+        JOIN result_links r2 ON r1.entity_type=r2.entity_type AND r1.entity_id=r2.entity_id
+        JOIN keywords k1 ON k1.id=r1.keyword_id
+        JOIN keywords k2 ON k2.id=r2.keyword_id
+        WHERE LOWER(TRIM(k1.keyword)) < LOWER(TRIM(k2.keyword))
+        GROUP BY a, b HAVING shared >= ? ORDER BY shared DESC
+        """,
+        (min_shared,),
+    ).fetchall()
+    if not rows:
+        return []
+    # Canonical display label per normalised keyword (a real keyword row so
+    # /keyword/<name> links resolve).
+    label = {r["norm"]: r["kw"] for r in conn.execute(
+        "SELECT LOWER(TRIM(keyword)) norm, MIN(keyword) kw FROM keywords GROUP BY 1"
+    )}
+    # Build symmetric adjacency.
+    adj: dict[str, list[tuple[str, int]]] = {}
+    for r in rows:
+        adj.setdefault(r["a"], []).append((r["b"], r["shared"]))
+        adj.setdefault(r["b"], []).append((r["a"], r["shared"]))
+    # Rank anchor keywords by total shared strength; take the top ones.
+    ranked = sorted(adj.items(), key=lambda kv: sum(s for _, s in kv[1]), reverse=True)
+    out = []
+    for norm, sibs in ranked[:top]:
+        sibs_sorted = sorted(sibs, key=lambda x: x[1], reverse=True)[:per]
+        out.append({
+            "keyword": label.get(norm, norm),
+            "related": [{"keyword": label.get(n, n), "shared": s} for n, s in sibs_sorted],
+        })
+    return out
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
     app.secret_key = "meta-osint-dev"
@@ -88,7 +146,8 @@ def create_app() -> Flask:
         with PostDatabase(config.DB_PATH) as db:
             stats = db.get_stats()
             keywords = db.get_keywords()
-            recent_posts = _attach_media_urls(db.get_posts(limit=25))
+            recent_posts = _attach_relevancy(_attach_media_urls(db.get_posts(limit=25)))
+            related = _related_keywords(db)
         # Weight each keyword by how much data it surfaced, then bucket into
         # mosaic tiers (bigger tile = more data) like the design's keyword
         # mosaic. weight = posts*3 + accounts + hashtags (posts count most).
@@ -98,26 +157,37 @@ def create_app() -> Flask:
         for k in keywords:
             r = k["weight"] / max_w
             k["tier"] = "xl" if r > 0.75 else "l" if r > 0.45 else "m" if r > 0.22 else "s"
+            k["bar_pct"] = round(r * 100)
         keywords.sort(key=lambda k: k["weight"], reverse=True)
-        return render_template("index.html", stats=stats, keywords=keywords, posts=recent_posts, config=config.as_dict())
+        return render_template("index.html", stats=stats, keywords=keywords,
+                               related=related, posts=recent_posts, config=config.as_dict())
 
     @app.route("/posts")
     def posts():
         platform = request.args.get("platform") or None
         keyword = request.args.get("keyword") or None
         sort = request.args.get("sort") or "latest"
+        # 'relevancy' is a display-time derived value, so fetch by a real sort
+        # then re-order in Python.
+        db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
-            rows = _attach_media_urls(db.get_posts(platform=platform, keyword=keyword, sort=sort, limit=100))
+            rows = _attach_relevancy(_attach_media_urls(
+                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100)))
             all_keywords = [k["keyword"] for k in db.get_keywords()]
+        if sort == "relevancy":
+            rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("posts.html", posts=rows, platform=platform, keyword=keyword,
                                sort=sort, all_keywords=all_keywords)
 
     @app.route("/keyword/<path:keyword>")
     def keyword_detail(keyword):
         sort = request.args.get("sort") or "latest"
+        db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
-            detail = db.get_keyword_detail(keyword, sort=sort)
-            detail["posts"] = _attach_media_urls(detail["posts"])
+            detail = db.get_keyword_detail(keyword, sort=db_sort)
+            detail["posts"] = _attach_relevancy(_attach_media_urls(detail["posts"]))
+        if sort == "relevancy":
+            detail["posts"].sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("keyword.html", d=detail, keyword=keyword, sort=sort)
 
     @app.route("/accounts")

@@ -199,7 +199,7 @@ h3 { font-family: var(--font-body); font-weight:600; font-size:18px; line-height
 .card:hover { border-color: var(--border-strong); }
 
 /* ---------- Metric tiles ---------- */
-.metrics { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: var(--sp-3); }
+.metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-4); }
 .metric {
   background: var(--bg-surface-1); border:1px solid var(--border-default);
   border-radius: var(--r-2); padding: var(--sp-4) var(--sp-5);
@@ -210,6 +210,41 @@ h3 { font-family: var(--font-body); font-weight:600; font-size:18px; line-height
 }
 .metric .val { font-family: var(--font-display); font-weight:700; font-size:30px; line-height:1; color: var(--fg-1); }
 .metric .lbl { font-family: var(--font-mono); font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color: var(--fg-2); margin-top:6px; }
+
+/* ---------- Relevancy badge (per-post keyword relevancy 0-100) ---------- */
+.rel-badge {
+  display:inline-flex; align-items:center; gap:5px;
+  font-family: var(--font-mono); font-size:11px; font-weight:600;
+  padding:2px 8px; border-radius: var(--r-pill);
+  border:1px solid currentColor; white-space:nowrap;
+}
+.rel-badge .rel-dot { width:6px; height:6px; border-radius:50%; background: currentColor; }
+.rel-badge.hi  { color: var(--threat-low);      background: var(--threat-low-tint); }
+.rel-badge.mid { color: var(--threat-elevated); background: var(--threat-elevated-tint); }
+.rel-badge.lo  { color: var(--threat-critical); background: var(--threat-critical-tint); }
+
+/* ---------- Keyword relevancy bar chart ---------- */
+.kw-bars { display:flex; flex-direction:column; gap:5px; }
+.kw-bar {
+  display:grid; grid-template-columns: 190px 1fr 44px; align-items:center;
+  gap: var(--sp-3); padding:4px 8px; border-radius: var(--r-1); text-decoration:none;
+  transition: background var(--dur) var(--ease);
+}
+.kw-bar:hover { background: var(--bg-surface-1); text-decoration:none; }
+.kw-bar-label { color: var(--fg-1); font-weight:500; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kw-bar-track { height:15px; background: var(--bg-surface-2); border:1px solid var(--border-default); border-radius: var(--r-pill); overflow:hidden; }
+.kw-bar-fill { display:block; height:100%; border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--brand-signal-dim), var(--brand-signal-bright));
+  transition: width var(--dur-slow, 200ms) var(--ease); }
+.kw-bar-val { color: var(--fg-2); font-size:12px; font-family: var(--font-mono); text-align:right; }
+@media (max-width: 640px) { .kw-bar { grid-template-columns: 110px 1fr 40px; } }
+
+/* ---------- Related-keywords panel ---------- */
+/* Two balanced columns via CSS columns so the panel height matches the bars. */
+.rel-columns { columns: 2; column-gap: var(--sp-5); }
+.rel-card { display:flex; flex-direction:column; gap:6px; break-inside:avoid; margin-bottom: var(--sp-4); }
+.rel-sibs { display:flex; flex-wrap:wrap; gap:5px; }
+@media (max-width: 720px) { .rel-columns { columns: 1; } }
 
 /* ---------- Keyword mosaic (tile size ∝ data volume) ---------- */
 .mosaic {

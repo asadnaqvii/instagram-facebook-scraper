@@ -1,0 +1,13 @@
+{# Relevancy badge macro. Usage:
+     {% import "_relevancy.html" as rel %}
+     {{ rel.badge(p.relevancy) }}
+   Colours by score band using the threat-scale tokens. Renders nothing when
+   the score is absent (post had no keywords to score against). #}
+{% macro badge(score) %}
+{%- if score is not none -%}
+  {%- set band = 'hi' if score >= 70 else 'mid' if score >= 40 else 'lo' -%}
+  <span class="rel-badge {{ band }}" title="Keyword relevancy: {{ score }}/100 (how on-topic this post is for its keyword)">
+    <span class="rel-dot"></span>rel {{ score }}
+  </span>
+{%- endif -%}
+{% endmacro %}

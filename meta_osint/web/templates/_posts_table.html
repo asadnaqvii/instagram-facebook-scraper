@@ -1,8 +1,9 @@
 {% import "_logos.html" as logos %}
+{% import "_relevancy.html" as rel %}
 {% if posts %}
 <div class="card" style="padding:0; overflow:hidden;">
 <table>
-  <tr><th></th><th>Platform</th><th>Author</th><th>Text</th><th>❤</th><th>💬</th><th>👁</th><th>Keyword</th><th>Link</th></tr>
+  <tr><th></th><th>Platform</th><th>Author</th><th>Text</th><th title="Keyword relevancy 0-100">Rel</th><th>❤</th><th>💬</th><th>👁</th><th>Keyword</th><th>Link</th></tr>
   {% for p in posts %}
   <tr>
     <td>
@@ -13,6 +14,7 @@
     <td><span class="badge {{ p.platform }}">{{ logos.platform(p.platform, 14) }} {{ p.platform }}</span></td>
     <td>{% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>{% else %}<span class="muted">{{ p.author_display_name or '—' }}</span>{% endif %}</td>
     <td style="max-width:340px;">{% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener">{{ (p.text or '')[:120] }}{% if (p.text or '')|length > 120 %}…{% endif %}</a>{% else %}{{ (p.text or '')[:120] }}{% endif %}</td>
+    <td>{{ rel.badge(p.relevancy) }}</td>
     <td class="mono">{{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</td>
     <td class="mono">{{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</td>
     <td class="mono">{{ '{:,}'.format(p.views) if p.views is not none else '—' }}</td>
