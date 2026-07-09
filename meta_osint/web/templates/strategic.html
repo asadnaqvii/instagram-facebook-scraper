@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% import "_logos.html" as logos %}
+{% import "_relevancy.html" as rel %}
+{% block title %}Strategic Intelligence · Strat-Watch Meta{% endblock %}
+{% block body %}
+
+<div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:var(--sp-5); flex-wrap:wrap; gap:var(--sp-3);">
+  <div>
+    <h1>✦ Strategic Intelligence</h1>
+    <p class="muted micro" style="margin-top:6px;">AI-scored strategic relevance · semantic analysis over the scraped corpus</p>
+  </div>
+  <div style="display:flex; gap:var(--sp-2); align-items:center;">
+    {% if not ollama_up %}
+    <span class="rel-badge lo" title="Local LLM (Ollama) not reachable — start it to enrich">● Ollama offline</span>
+    {% endif %}
+    <form method="post" action="{{ url_for('enrich') }}" style="margin:0;">
+      <button type="submit" {% if not ollama_up %}disabled title="Start Ollama to enable AI enrichment"{% endif %}>
+        ⟳ Enrich data{% if pending %} · {{ pending }} new{% endif %}
+      </button>
+    </form>
+    {% if summary.enriched %}
+    <form method="post" action="{{ url_for('enrich') }}" style="margin:0;"
+          onsubmit="return confirm('Re-score ALL {{ summary.enriched }} enriched posts against the current strategic keywords? This clears existing AI scores first.');">
+      <input type="hidden" name="rescore" value="1">
+      <button type="submit" class="btn-ghost" {% if not ollama_up %}disabled{% endif %}
+              title="Clear all AI scores and re-run (use after changing strategic keywords)">↻ Re-score all</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if active_job %}
+<div class="card" style="margin-bottom:var(--sp-5); border-color:var(--brand-signal);">
+  <div style="display:flex; align-items:center; gap:10px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:var(--brand-signal);display:inline-block;animation:pulse 1.2s ease-in-out infinite;"></span>
+    <span>An enrichment run is in progress.</span>
+    <a href="{{ url_for('job_status', job_id=active_job.id) }}" class="micro" style="margin-left:auto;">view live progress →</a>
+  </div>
+</div>
+{% endif %}
+
+{# ── Summary strip ── #}
+<div class="strat-hero">
+  <div class="strat-stat"><div class="v">{{ '{:,}'.format(summary.enriched or 0) }}</div><div class="l">posts enriched</div></div>
+  <div class="strat-stat hi"><div class="v">{{ summary.high or 0 }}</div><div class="l">high relevance (71+)</div></div>
+  <div class="strat-stat"><div class="v">{{ summary.relevant or 0 }}</div><div class="l">relevant (46+)</div></div>
+  <div class="strat-stat"><div class="v">{{ summary.avg_rel if summary.avg_rel is not none else '—' }}</div><div class="l">avg strategic score</div></div>
+  <div class="strat-stat"><div class="v">{{ pending }}</div><div class="l">awaiting enrichment</div></div>
+</div>
+
+{# ── Strategic keyword editor (the analysis lens) ── #}
+<div class="section-head"><h3>Strategic keywords</h3><div class="rule"></div>
+  <span class="micro">the lens the AI scores every post against</span>
+</div>
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <div class="strat-kw-row" style="margin-bottom:var(--sp-4);">
+    {% if strategic_keywords %}
+      {% for kw in strategic_keywords %}
+      <span class="strat-kw">
+        {{ kw }}
+        <form method="post" action="{{ url_for('strategic_keyword_remove') }}" style="margin:0; display:inline;">
+          <input type="hidden" name="keyword" value="{{ kw }}">
+          <button type="submit" title="remove">×</button>
+        </form>
+      </span>
+      {% endfor %}
+    {% else %}
+      <span class="muted micro">No strategic keywords yet — add a few (e.g. <em>nuclear</em>, <em>missile defense</em>, <em>naval deployment</em>) so the AI knows what "strategically relevant" means, then click Enrich.</span>
+    {% endif %}
+  </div>
+  <form method="post" action="{{ url_for('strategic_keyword_add') }}" style="display:flex; gap:var(--sp-2); flex-wrap:wrap;">
+    <input type="text" name="keyword" placeholder="add keyword(s) — comma or newline separated" style="flex:1; min-width:240px;" autocomplete="off">
+    <button type="submit">＋ Add</button>
+  </form>
+  {% if strategic_keywords and summary.enriched %}
+  <p class="muted micro" style="margin-top:var(--sp-3);">Changed the keywords? Existing scores were computed against the old lens — use <strong>↻ Re-score all</strong> above to recompute.</p>
+  {% endif %}
+</div>
+
+{% if not summary.enriched %}
+<div class="strat-empty">
+  <p style="font-size:15px; color:var(--fg-1);">No AI scores yet.</p>
+  <p class="micro" style="margin-top:8px;">Add strategic keywords above, then click <strong>Enrich data</strong>. The local LLM will semantically score each post's strategic relevance — the trends below fill in as it runs.</p>
+</div>
+{% else %}
+
+{# ── 1. Strategic pages leaderboard ── #}
+<div class="section-head"><h3>Strategic pages &amp; accounts</h3><div class="rule"></div>
+  <span class="micro">ranked by average strategic relevance</span>
+</div>
+<div class="card" style="margin-bottom:var(--sp-6);">
+  {% if leaderboard %}
+    {% for a in leaderboard %}
+    <a class="lb-row" href="{{ url_for('posts', keyword='') }}" title="{{ a.posts }} enriched post(s) · avg {{ a.avg_rel }} · peak {{ a.max_rel }}">
+      <span class="lb-name">{% if a.platform %}{{ logos.platform(a.platform, 12) }} {% endif %}{{ a.author }}</span>
+      <span class="lb-track"><span class="lb-fill" style="width: {{ [a.avg_rel|int, 3]|max }}%;"></span></span>
+      <span class="lb-meta">avg {{ a.avg_rel|int }} · {{ a.posts }}p</span>
+    </a>
+    {% endfor %}
+  {% else %}
+    <p class="muted micro">No accounts scored yet.</p>
+  {% endif %}
+</div>
+
+{# ── 2. Activity over time ── #}
+<div class="section-head"><h3>Strategic activity over time</h3><div class="rule"></div>
+  <span class="micro">posts with a known timestamp</span>
+</div>
+<div class="card" style="margin-bottom:var(--sp-6);">
+  {% if timeline and timeline|length > 1 %}
+    {% set W = 820 %}{% set H = 200 %}{% set PAD = 28 %}
+    {% set maxv = (timeline|map(attribute='total_rel')|map('int')|list|max) or 1 %}
+    {% set n = timeline|length %}
+    <svg class="strat-chart" viewBox="0 0 {{ W }} {{ H }}" preserveAspectRatio="none" role="img" aria-label="Strategic activity over time">
+      {# baseline #}
+      <line class="axis" x1="{{ PAD }}" y1="{{ H - PAD }}" x2="{{ W - PAD }}" y2="{{ H - PAD }}"></line>
+      {%- set pts = [] -%}
+      {%- for d in timeline -%}
+        {%- set x = PAD + (loop.index0) * ((W - 2*PAD) / (n - 1)) -%}
+        {%- set y = (H - PAD) - ((d.total_rel|int) / maxv) * (H - 2*PAD) -%}
+        {%- set _ = pts.append(x|round(1)|string + ',' + y|round(1)|string) -%}
+      {%- endfor -%}
+      <polygon class="area" points="{{ PAD }},{{ H - PAD }} {{ pts|join(' ') }} {{ W - PAD }},{{ H - PAD }}"></polygon>
+      <polyline class="line" points="{{ pts|join(' ') }}"></polyline>
+      {%- for d in timeline -%}
+        {%- set x = PAD + (loop.index0) * ((W - 2*PAD) / (n - 1)) -%}
+        {%- set y = (H - PAD) - ((d.total_rel|int) / maxv) * (H - 2*PAD) -%}
+        <circle class="dot" cx="{{ x|round(1) }}" cy="{{ y|round(1) }}" r="2.5"><title>{{ d.day }} · {{ d.posts }} post(s) · relevance {{ d.total_rel }}</title></circle>
+      {%- endfor -%}
+    </svg>
+    <div class="micro muted" style="display:flex; justify-content:space-between; margin-top:6px;">
+      <span>{{ timeline[0].day }}</span><span>{{ timeline[-1].day }}</span>
+    </div>
+  {% else %}
+    <p class="muted micro">Not enough timestamped posts to draw a trend yet. Many scraped posts lack a precise timestamp, so they don't appear here (but still count in the totals above).</p>
+  {% endif %}
+</div>
+
+{# ── 3. Strategic sentiment + themes ── #}
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); align-items:start; margin-bottom:var(--sp-6);">
+  <div class="card">
+    <div class="micro" style="margin-bottom:var(--sp-4);">Sentiment of strategic posts</div>
+    {% if sentiment %}
+      {% set stotal = (sentiment|map(attribute='n')|map('int')|sum) or 1 %}
+      <div class="sent-bar">
+        {% for s in sentiment %}
+        <div class="sent-seg sent-{{ s.sentiment }}" style="width: {{ (s.n / stotal * 100)|round(1) }}%;" title="{{ s.sentiment }}: {{ s.n }}"></div>
+        {% endfor %}
+      </div>
+      <div class="sent-legend">
+        {% for s in sentiment %}
+        <span><span class="sw sent-{{ s.sentiment }}"></span>{{ s.sentiment.replace('_',' ') }} · {{ s.n }}</span>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted micro">No clearly-strategic posts (score ≥ 46) yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="micro" style="margin-bottom:var(--sp-4);">Top themes &amp; entities</div>
+    {% if themes or entities %}
+      <div class="chip-cloud">
+        {% for t, c in themes %}<span class="chip">{{ t }} <span class="n">·{{ c }}</span></span>{% endfor %}
+        {% for e, c in entities %}<span class="chip cyan">{{ e }} <span class="n">·{{ c }}</span></span>{% endfor %}
+      </div>
+    {% else %}
+      <p class="muted micro">Themes appear once posts are enriched with topics/entities.</p>
+    {% endif %}
+  </div>
+</div>
+
+{# ── 4. Top strategic posts ── #}
+<div class="section-head"><h3>Top strategic posts</h3><div class="rule"></div>
+  <span class="micro">highest AI relevance</span>
+</div>
+{% if top_posts %}
+<div class="feed-grid">
+  {% for p in top_posts %}
+  <div class="card post-card">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="badge {{ p.platform }}">{{ logos.platform(p.platform, 14) }} {{ p.platform }}</span>
+      {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>
+      {% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
+      <span style="margin-left:auto;">{{ rel.badge(p.relevancy, p.relevancy_source, p.relevancy_rationale) }}</span>
+    </div>
+
+    {% if p.videos %}
+      <video controls preload="none" {% if p.videos[0].thumb_src %}poster="{{ p.videos[0].thumb_src }}"{% endif %} src="{{ p.videos[0].src }}" style="max-height:280px; background:#000;"></video>
+    {% elif p.images %}
+    <div style="display:grid; grid-template-columns:repeat({{ 2 if p.images|length > 1 else 1 }},1fr); gap:6px;">
+      {% for img in p.images[:2] %}
+      <a href="{{ img.src }}" target="_blank"><img class="post-img" src="{{ img.src }}" alt="{{ img.alt_text or '' }}"></a>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if p.text %}<div style="font-size:14px; line-height:1.5;">{{ p.text[:240] }}{% if p.text|length > 240 %}…{% endif %}</div>{% endif %}
+
+    {% if p.relevancy_rationale %}
+    <div class="micro" style="color:var(--accent-intel); border-left:2px solid var(--accent-intel); padding-left:8px;">
+      {{ p.relevancy_rationale }}
+    </div>
+    {% endif %}
+
+    <div class="engagement">
+      <span>❤ {{ '{:,}'.format(p.likes) if p.likes is not none else '—' }}</span>
+      <span>💬 {{ '{:,}'.format(p.comments_count) if p.comments_count is not none else '—' }}</span>
+      {% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener" style="margin-left:auto;">open ↗</a>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted micro">No strategic posts yet.</p>
+{% endif %}
+
+{% endif %}
+{% endblock %}

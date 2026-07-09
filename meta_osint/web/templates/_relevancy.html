@@ -1,13 +1,21 @@
 {# Relevancy badge macro. Usage:
      {% import "_relevancy.html" as rel %}
-     {{ rel.badge(p.relevancy) }}
-   Colours by score band using the threat-scale tokens. Renders nothing when
-   the score is absent (post had no keywords to score against). #}
-{% macro badge(score) %}
+     {{ rel.badge(p.relevancy, p.relevancy_source, p.relevancy_rationale) }}
+   Colours by score band using the threat-scale tokens. `source` labels the
+   badge "AI" (green — a semantic strategic score) or "NLP" (muted — the
+   keyword-match fallback). Renders nothing when the score is absent. #}
+{% macro badge(score, source=None, rationale=None) %}
 {%- if score is not none -%}
   {%- set band = 'hi' if score >= 70 else 'mid' if score >= 40 else 'lo' -%}
-  <span class="rel-badge {{ band }}" title="Keyword relevancy: {{ score }}/100 (how on-topic this post is for its keyword)">
-    <span class="rel-dot"></span>rel {{ score }}
+  {%- set is_ai = (source == 'AI') -%}
+  {%- set label = 'AI' if is_ai else 'rel' -%}
+  {%- set tip -%}
+    {%- if is_ai -%}AI strategic relevance: {{ score }}/100{% if rationale %} — {{ rationale }}{% endif %}
+    {%- else -%}Keyword relevancy: {{ score }}/100 (NLP keyword match — run Enrich for an AI score)
+    {%- endif -%}
+  {%- endset -%}
+  <span class="rel-badge {{ band }}{{ ' ai' if is_ai }}" title="{{ tip }}">
+    <span class="rel-dot"></span>{{ label }} {{ score }}
   </span>
 {%- endif -%}
 {% endmacro %}

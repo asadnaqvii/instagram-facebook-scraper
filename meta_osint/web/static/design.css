@@ -222,6 +222,10 @@ h3 { font-family: var(--font-body); font-weight:600; font-size:18px; line-height
 .rel-badge.hi  { color: var(--threat-low);      background: var(--threat-low-tint); }
 .rel-badge.mid { color: var(--threat-elevated); background: var(--threat-elevated-tint); }
 .rel-badge.lo  { color: var(--threat-critical); background: var(--threat-critical-tint); }
+/* AI-scored badge: keeps its score-band tint but a cyan ring + solid dot marks
+   it as a semantic (LLM) strategic score rather than the NLP keyword match. */
+.rel-badge.ai { box-shadow: 0 0 0 1px var(--accent-intel) inset; }
+.rel-badge.ai .rel-dot { background: var(--accent-intel); box-shadow: 0 0 4px var(--accent-intel); }
 
 /* ---------- Keyword relevancy bar chart ---------- */
 .kw-bars { display:flex; flex-direction:column; gap:5px; }
@@ -359,3 +363,82 @@ tbody tr:hover { background: var(--bg-surface-1); }
 .status-run { color: var(--brand-signal); }
 .status-done { color: var(--threat-low); }
 .status-err { color: var(--threat-critical); }
+
+/* ============================================================
+   Strategic Intelligence page
+   ============================================================ */
+
+/* Hero / summary stat strip */
+.strat-hero {
+  display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+  gap: var(--sp-4); margin-bottom: var(--sp-6);
+}
+.strat-stat {
+  border:1px solid var(--border-default); border-radius: var(--r-2);
+  background: var(--bg-surface-1); padding: var(--sp-4) var(--sp-5);
+  position:relative; overflow:hidden;
+}
+.strat-stat::after {
+  content:''; position:absolute; inset:0 auto 0 0; width:3px;
+  background: var(--accent-intel); opacity:.7;
+}
+.strat-stat .v { font-family: var(--font-display); font-weight:700; font-size:26px; color: var(--fg-0); }
+.strat-stat .l { color: var(--fg-2); font-size:12px; margin-top:2px; }
+.strat-stat.hi .v { color: var(--threat-low); }
+
+/* Strategic keyword editor — chips with an inline remove button */
+.strat-kw-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.strat-kw {
+  display:inline-flex; align-items:center; gap:8px;
+  background: var(--accent-intel-tint); color: var(--accent-intel);
+  border:1px solid rgba(91,192,235,0.35); border-radius: var(--r-pill);
+  padding:4px 6px 4px 12px; font-family: var(--font-mono); font-size:13px;
+}
+.strat-kw button {
+  all:unset; cursor:pointer; width:18px; height:18px; line-height:18px;
+  text-align:center; border-radius:50%; color: var(--accent-intel);
+  font-size:14px; opacity:.7;
+}
+.strat-kw button:hover { opacity:1; background: rgba(91,192,235,0.2); }
+
+/* Leaderboard bars (avg relevance per account) */
+.lb-row {
+  display:grid; grid-template-columns: 200px 1fr 96px; align-items:center;
+  gap: var(--sp-3); padding:5px 8px; border-radius: var(--r-1); text-decoration:none;
+}
+.lb-row:hover { background: var(--bg-surface-1); text-decoration:none; }
+.lb-name { color: var(--fg-1); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-family: var(--font-mono); }
+.lb-track { height:15px; background: var(--bg-surface-2); border:1px solid var(--border-default); border-radius: var(--r-pill); overflow:hidden; }
+.lb-fill { display:block; height:100%; border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--accent-intel-tint), var(--accent-intel)); }
+.lb-meta { color: var(--fg-2); font-size:11px; font-family: var(--font-mono); text-align:right; }
+@media (max-width: 640px) { .lb-row { grid-template-columns: 120px 1fr 80px; } }
+
+/* Timeline SVG frame */
+.strat-chart { width:100%; height:auto; display:block; }
+.strat-chart .axis { stroke: var(--border-default); stroke-width:1; }
+.strat-chart .area { fill: var(--accent-intel-tint); }
+.strat-chart .line { fill:none; stroke: var(--accent-intel); stroke-width:2; }
+.strat-chart .dot  { fill: var(--accent-intel); }
+
+/* Sentiment stacked bar */
+.sent-bar { display:flex; height:26px; border-radius: var(--r-pill); overflow:hidden; border:1px solid var(--border-default); }
+.sent-seg { height:100%; }
+.sent-very_positive { background:#2ea043; }
+.sent-positive      { background:#3fb950; }
+.sent-neutral       { background:#6e7681; }
+.sent-negative      { background:#f0883e; }
+.sent-very_negative { background:#f85149; }
+.sent-unknown       { background:var(--bg-surface-2); }
+.sent-legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:12px; color: var(--fg-2); font-family: var(--font-mono); }
+.sent-legend .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+
+/* Theme / entity chip cloud */
+.chip-cloud { display:flex; flex-wrap:wrap; gap:8px; }
+.chip-cloud .chip .n { opacity:.6; }
+
+/* Empty-state note */
+.strat-empty {
+  border:1px dashed var(--border-default); border-radius: var(--r-2);
+  padding: var(--sp-6); text-align:center; color: var(--fg-2);
+}

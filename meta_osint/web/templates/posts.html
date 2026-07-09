@@ -38,7 +38,7 @@
       {% if p.author_username %}<span class="mono">@{{ p.author_username }}</span>
       {% elif p.author_display_name %}<span>{{ p.author_display_name }}</span>{% endif %}
       {% if p.author_is_verified %}<span title="verified" style="color:var(--accent-intel);">✓</span>{% endif %}
-      <span style="margin-left:auto;">{{ rel.badge(p.relevancy) }}</span>
+      <span style="margin-left:auto;">{{ rel.badge(p.relevancy, p.relevancy_source, p.relevancy_rationale) }}</span>
     </div>
 
     {% if p.videos %}

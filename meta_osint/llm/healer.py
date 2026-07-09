@@ -257,6 +257,94 @@ class SelectorHealer:
             "model_used": self.client.model,
         }
 
+    def analyze_strategic(
+        self,
+        text: str,
+        strategic_keywords: Optional[list[str]] = None,
+        context: Optional[dict] = None,
+    ) -> Optional[dict]:
+        """On-demand semantic enrichment for the Strategic Intelligence pass.
+
+        Sibling of analyze(): same sentiment/entity/topic dict, PLUS a
+        semantic strategic-relevance score (0-100) and a one-line rationale,
+        judged against `strategic_keywords` as an analysis lens (understanding,
+        not word-matching). Gated on Ollama availability ONLY — unlike
+        analyze() it does NOT require LLM_CONTENT_ANALYSIS, so the "Enrich data"
+        button works regardless of the scraper-time analysis flag.
+
+        Returns None when Ollama is down or the text is too short — the caller
+        treats None as "skip, leave untouched" so the DB is never corrupted.
+        With no strategic keywords set, falls back to generic analysis and a
+        relevance of 0 (the UI warns the user to add keywords first).
+        """
+        if not self.client.is_available():
+            return None
+        if not text or len(text.strip()) < 12:
+            return None
+        context = context or {}
+        kws = [k for k in (strategic_keywords or []) if str(k).strip()]
+
+        if not kws:
+            base = self.analyze_forced(text, context)
+            if base is None:
+                return None
+            base["strategic_relevance"] = 0
+            base["strategic_rationale"] = "No strategic keywords defined."
+            return base
+
+        prompt = _STRATEGIC_PROMPT.format(
+            platform=context.get("platform", ""),
+            author=context.get("author", ""),
+            keywords=", ".join(kws[:40]),
+            text=text[:1500],
+        )
+        parsed = self.client.generate_json(prompt, temperature=0.1, num_predict=480)
+        if not isinstance(parsed, dict):
+            return None
+        rel = _clamp(parsed.get("strategic_relevance"), 0, 100)
+        return {
+            "sentiment": parsed.get("sentiment", "neutral"),
+            "sentiment_score": _clamp(parsed.get("score"), -1, 1),
+            "entities_people": _str_list(parsed.get("people")),
+            "entities_orgs": _str_list(parsed.get("organizations")),
+            "entities_locations": _str_list(parsed.get("locations")),
+            "topics": _str_list(parsed.get("topics")),
+            "language": parsed.get("language"),
+            "strategic_relevance": int(rel) if rel is not None else 0,
+            "strategic_rationale": (str(parsed.get("rationale") or "").strip())[:280],
+            "model_used": self.client.model,
+        }
+
+    def analyze_forced(self, text: str, context: Optional[dict] = None) -> Optional[dict]:
+        """Same as analyze() but gated on availability only (no analysis flag).
+
+        Used by the on-demand enrichment path when no strategic keywords are
+        set, so the user still gets sentiment/entities without flipping the
+        scraper-time LLM_CONTENT_ANALYSIS toggle."""
+        if not self.client.is_available():
+            return None
+        if not text or len(text.strip()) < 12:
+            return None
+        context = context or {}
+        prompt = _ANALYSIS_PROMPT.format(
+            platform=context.get("platform", ""),
+            author=context.get("author", ""),
+            text=text[:1500],
+        )
+        parsed = self.client.generate_json(prompt, temperature=0.1, num_predict=400)
+        if not isinstance(parsed, dict):
+            return None
+        return {
+            "sentiment": parsed.get("sentiment", "neutral"),
+            "sentiment_score": _clamp(parsed.get("score"), -1, 1),
+            "entities_people": _str_list(parsed.get("people")),
+            "entities_orgs": _str_list(parsed.get("organizations")),
+            "entities_locations": _str_list(parsed.get("locations")),
+            "topics": _str_list(parsed.get("topics")),
+            "language": parsed.get("language"),
+            "model_used": self.client.model,
+        }
+
 
 # ── prompts ──────────────────────────────────────────────────────────
 
@@ -296,6 +384,32 @@ Post: "{text}"
 
 Respond with ONLY a JSON object in exactly this shape:
 {{"sentiment": "very_negative|negative|neutral|positive|very_positive", \
+"score": <number -1..1>, "people": [], "organizations": [], "locations": [], \
+"topics": [], "language": "<ISO 639-1 code>"}}
+
+JSON:"""
+
+_STRATEGIC_PROMPT = """You are an intelligence analyst assessing a social media \
+post against a set of STRATEGIC KEYWORDS. Judge how strategically significant \
+the post is by MEANING, not by surface word-matching: a post can be highly \
+relevant without containing any keyword verbatim (e.g. discussing warhead \
+throw-weight is relevant to "missile defense"), and a post can mention a \
+keyword and still be irrelevant (e.g. a "defence" in a sports headline).
+
+Strategic keywords (the analysis lens): {keywords}
+
+Platform: {platform}. Author: {author}.
+Post: "{text}"
+
+Score strategic_relevance 0-100:
+  0-20   unrelated / incidental keyword mention only
+  21-45  loosely related topic, low intelligence value
+  46-70  clearly on-topic, some strategic substance
+  71-100 directly and substantively strategic (actors, capabilities, events)
+
+Respond with ONLY a JSON object in exactly this shape:
+{{"strategic_relevance": <integer 0-100>, "rationale": "<one concise sentence \
+on why>", "sentiment": "very_negative|negative|neutral|positive|very_positive", \
 "score": <number -1..1>, "people": [], "organizations": [], "locations": [], \
 "topics": [], "language": "<ISO 639-1 code>"}}
 

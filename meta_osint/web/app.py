@@ -14,6 +14,8 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 
 from .. import config
 from ..database.db import PostDatabase
+from ..llm.ollama_client import OllamaClient
+from ..llm.healer import SelectorHealer
 from ..orchestrator import ScrapeConfig, run_sync
 from ..scraper.helpers import keyword_relevancy
 
@@ -53,6 +55,114 @@ def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
         JOBS[job_id]["error"] = str(e)
 
 
+# Upper bound on posts scored per enrich run — a safety cap, not a limit users
+# should normally hit (the corpus is a few hundred posts).
+_ENRICH_RUN_CAP = 2000
+_ENRICH_BATCH = 50
+
+
+def _run_enrich_job(job_id: str, rescore: bool = False) -> None:
+    """On-demand AI enrichment pass over posts lacking a strategic score.
+
+    Reuses the JOBS pattern (same progress log + cancel flag + /api/job
+    endpoints as scraping). For each un-enriched post it asks the LLM for a
+    semantic strategic-relevance score (against the saved strategic keywords)
+    plus sentiment/entities, and writes the result back. Degrades safely: if
+    Ollama is down it aborts cleanly without touching the DB; posts the LLM
+    can't score are skipped (tracked in-memory) so the batch fetch can't loop.
+    """
+    job = JOBS[job_id]
+    job["status"] = "running"
+    lines: list[str] = job["log"]
+
+    def log(msg: str) -> None:
+        lines.append(msg)
+
+    def should_stop() -> bool:
+        return JOBS.get(job_id, {}).get("cancel", False)
+
+    try:
+        healer = SelectorHealer(client=OllamaClient())
+        if not healer.client.is_available():
+            log("Ollama is not available — cannot enrich. Start Ollama and retry.")
+            job["status"] = "error"
+            job["error"] = "Ollama unavailable"
+            return
+
+        with PostDatabase(config.DB_PATH) as db:
+            if rescore:
+                db.reset_strategic_scores()
+                log("Cleared existing strategic scores — re-scoring all posts.")
+
+            strat_kws = db.get_strategic_keywords()
+            if strat_kws:
+                log(f"Analysis lens: {', '.join(strat_kws)}")
+            else:
+                log("No strategic keywords defined — scoring generic relevance (0). "
+                    "Add keywords on the Strategic Intelligence page for real scores.")
+
+            total = db.count_posts_needing_analysis()
+            log(f"{total} post(s) to enrich.")
+            if total == 0:
+                job["status"] = "done"
+                job["result"] = {"enriched": 0, "skipped": 0}
+                return
+
+            enriched = 0
+            skipped_ids: set[int] = set()
+            processed = 0
+            while processed < _ENRICH_RUN_CAP:
+                if should_stop():
+                    log("[stopped by user]")
+                    break
+                batch = db.get_posts_needing_analysis(
+                    limit=_ENRICH_BATCH, exclude_ids=skipped_ids
+                )
+                if not batch:
+                    break
+                for row in batch:
+                    if should_stop():
+                        log("[stopped by user]")
+                        break
+                    processed += 1
+                    context = {
+                        "platform": row.get("platform", ""),
+                        "author": row.get("author_username")
+                        or row.get("author_display_name") or "",
+                    }
+                    analysis = healer.analyze_strategic(
+                        row.get("text"), strat_kws, context
+                    )
+                    if analysis is None:
+                        # LLM couldn't score this one. If Ollama went down
+                        # mid-run, abort the whole pass (re-check); otherwise
+                        # skip just this post so we don't refetch it forever.
+                        if not healer.client.is_available():
+                            log("Ollama went offline mid-run — aborting. "
+                                f"{enriched} post(s) saved so far.")
+                            job["status"] = "error"
+                            job["error"] = "Ollama went offline"
+                            return
+                        skipped_ids.add(row["id"])
+                        continue
+                    db.update_post_analysis(row["id"], analysis)
+                    enriched += 1
+                    if enriched % 10 == 0 or enriched == 1:
+                        rel = analysis.get("strategic_relevance")
+                        log(f"  [{enriched}/{total}] scored post {row['id']} "
+                            f"→ strategic {rel}")
+                if should_stop():
+                    break
+
+            job["status"] = "stopped" if job.get("cancel") else "done"
+            job["result"] = {"enriched": enriched, "skipped": len(skipped_ids)}
+            log(f"Done — {enriched} enriched, {len(skipped_ids)} skipped.")
+    except Exception as e:  # noqa: BLE001
+        job["status"] = "error"
+        job["error"] = str(e)
+        lines.append(f"Error: {e}")
+
+
 def _attach_media_urls(posts: list[dict]) -> list[dict]:
     """Add browser-servable URLs for each downloaded media file + thumbnail."""
     for p in posts:
@@ -69,18 +179,32 @@ def _attach_media_urls(posts: list[dict]) -> list[dict]:
     return posts
 
 
-def _attach_relevancy(posts: list[dict]) -> list[dict]:
-    """Score each post's relevancy (0-100) to the keyword(s) that surfaced it.
+def _attach_relevancy(posts: list[dict], ai_scores: dict | None = None) -> list[dict]:
+    """Attach a per-post relevancy (0-100) + its source label.
 
-    Computed at display time from the post's own text/hashtags/author — no DB
-    change. Separates on-topic hits from keyword-coincidence noise."""
+    Prefers the stored AI strategic score ('AI') where a post has been
+    enriched; otherwise falls back to the display-time NLP keyword match
+    ('NLP'). `ai_scores` maps post_id -> {relevance, rationale}; when omitted
+    the AI overlay is fetched from the row's own strategic_relevance column if
+    present (top-strategic feed hydrates it directly)."""
+    ai_scores = ai_scores or {}
     for p in posts:
-        p["relevancy"] = keyword_relevancy(
-            p.get("text"),
-            p.get("hashtags"),
-            p.get("author_display_name") or p.get("author_username"),
-            p.get("keywords"),
-        )
+        ai = ai_scores.get(p.get("id"))
+        ai_rel = ai["relevance"] if ai else p.get("strategic_relevance")
+        ai_rationale = ai["rationale"] if ai else p.get("strategic_rationale")
+        if ai_rel is not None:
+            p["relevancy"] = ai_rel
+            p["relevancy_source"] = "AI"
+            p["relevancy_rationale"] = ai_rationale
+        else:
+            p["relevancy"] = keyword_relevancy(
+                p.get("text"),
+                p.get("hashtags"),
+                p.get("author_display_name") or p.get("author_username"),
+                p.get("keywords"),
+            )
+            p["relevancy_source"] = "NLP"
+            p["relevancy_rationale"] = None
     return posts
 
 
@@ -146,7 +270,9 @@ def create_app() -> Flask:
         with PostDatabase(config.DB_PATH) as db:
             stats = db.get_stats()
             keywords = db.get_keywords()
-            recent_posts = _attach_relevancy(_attach_media_urls(db.get_posts(limit=25)))
+            ai_scores = db.get_strategic_scores()
+            recent_posts = _attach_relevancy(
+                _attach_media_urls(db.get_posts(limit=25)), ai_scores)
             related = _related_keywords(db)
         # Weight each keyword by how much data it surfaced, then bucket into
         # mosaic tiers (bigger tile = more data) like the design's keyword
@@ -171,8 +297,10 @@ def create_app() -> Flask:
         # then re-order in Python.
         db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
+            ai_scores = db.get_strategic_scores()
             rows = _attach_relevancy(_attach_media_urls(
-                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100)))
+                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100)),
+                ai_scores)
             all_keywords = [k["keyword"] for k in db.get_keywords()]
         if sort == "relevancy":
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
@@ -185,7 +313,9 @@ def create_app() -> Flask:
         db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
             detail = db.get_keyword_detail(keyword, sort=db_sort)
-            detail["posts"] = _attach_relevancy(_attach_media_urls(detail["posts"]))
+            ai_scores = db.get_strategic_scores()
+            detail["posts"] = _attach_relevancy(
+                _attach_media_urls(detail["posts"]), ai_scores)
         if sort == "relevancy":
             detail["posts"].sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("keyword.html", d=detail, keyword=keyword, sort=sort)
@@ -203,6 +333,97 @@ def create_app() -> Flask:
         with PostDatabase(config.DB_PATH) as db:
             rows = db.get_hashtags(limit=200)
         return render_template("hashtags.html", hashtags=rows)
+
+    # ── Strategic Intelligence (AI enrichment) ───────────────────────
+
+    @app.route("/strategic")
+    def strategic():
+        from collections import Counter
+
+        with PostDatabase(config.DB_PATH) as db:
+            strat_kws = db.get_strategic_keywords()
+            pending = db.count_posts_needing_analysis()
+            summary = db.get_strategic_summary()
+            leaderboard = db.get_strategic_leaderboard()
+            timeline = db.get_strategic_timeline()
+            sentiment = db.get_strategic_sentiment_breakdown()
+            top_posts = _attach_relevancy(
+                _attach_media_urls(db.get_top_strategic_posts(12)))
+
+        # Themes + entities: count topics/orgs across the top strategic posts.
+        theme_counts: Counter = Counter()
+        entity_counts: Counter = Counter()
+        for p in top_posts:
+            for t in (p.get("topics") or []):
+                theme_counts[str(t).strip().lower()] += 1
+            for e in (p.get("entities_orgs") or []):
+                entity_counts[str(e).strip()] += 1
+        themes = theme_counts.most_common(18)
+        entities = entity_counts.most_common(18)
+
+        # A running enrich job (if any) so the page can show live progress.
+        active_job = next(
+            (j for j in JOBS.values()
+             if j.get("kind") == "enrich" and j.get("status") in ("queued", "running")),
+            None,
+        )
+
+        ollama_up = OllamaClient().is_available()
+        return render_template(
+            "strategic.html",
+            strategic_keywords=strat_kws,
+            pending=pending,
+            summary=summary,
+            leaderboard=leaderboard,
+            timeline=timeline,
+            sentiment=sentiment,
+            top_posts=top_posts,
+            themes=themes,
+            entities=entities,
+            ollama_up=ollama_up,
+            active_job=active_job,
+        )
+
+    @app.route("/strategic/keyword/add", methods=["POST"])
+    def strategic_keyword_add():
+        raw = request.form.get("keyword", "")
+        # Accept comma/newline-separated multiple entries.
+        kws = [k.strip() for k in raw.replace(",", "\n").splitlines() if k.strip()]
+        with PostDatabase(config.DB_PATH) as db:
+            for k in kws:
+                db.add_strategic_keyword(k)
+        return redirect(url_for("strategic"))
+
+    @app.route("/strategic/keyword/remove", methods=["POST"])
+    def strategic_keyword_remove():
+        kw = request.form.get("keyword", "").strip()
+        if kw:
+            with PostDatabase(config.DB_PATH) as db:
+                db.remove_strategic_keyword(kw)
+        return redirect(url_for("strategic"))
+
+    @app.route("/enrich", methods=["POST"])
+    def enrich():
+        """Kick off an AI enrichment pass (background job, reuses job UI)."""
+        # Don't stack enrich jobs.
+        existing = next(
+            (j for j in JOBS.values()
+             if j.get("kind") == "enrich" and j.get("status") in ("queued", "running")),
+            None,
+        )
+        if existing:
+            return redirect(url_for("job_status", job_id=existing["id"]))
+
+        rescore = request.form.get("rescore") == "1"
+        job_id = uuid.uuid4().hex[:8]
+        JOBS[job_id] = {
+            "id": job_id, "kind": "enrich", "status": "queued", "log": [],
+            "keywords": ["AI enrichment"], "started": time.time(),
+        }
+        threading.Thread(
+            target=_run_enrich_job, args=(job_id, rescore), daemon=True
+        ).start()
+        return redirect(url_for("job_status", job_id=job_id))
 
     @app.route("/scrape", methods=["GET", "POST"])
     def scrape():

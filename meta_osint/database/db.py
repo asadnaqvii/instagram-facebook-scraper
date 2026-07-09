@@ -126,6 +126,9 @@ class PostDatabase:
                 topics TEXT,
                 language TEXT,
                 analysis_model TEXT,
+                -- Strategic Intelligence (on-demand AI enrichment)
+                strategic_relevance INTEGER,
+                strategic_rationale TEXT,
                 raw_meta TEXT,
                 scraped_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -184,6 +187,15 @@ class PostDatabase:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Strategic keywords: the analysis lens for AI enrichment. Distinct
+            -- from search `keywords` (which drove scraping) — these define what
+            -- "strategically relevant" means when scoring posts.
+            CREATE TABLE IF NOT EXISTS strategic_keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL UNIQUE,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS search_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 keyword_id INTEGER,
@@ -218,7 +230,28 @@ class PostDatabase:
             CREATE INDEX IF NOT EXISTS idx_result_links_kw ON result_links(keyword_id);
             """
         )
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Idempotent schema upgrades for DBs created before a column existed.
+
+        Safe to run every connect: each ALTER is guarded by a PRAGMA check, so
+        a populated DB copy gains the new columns without losing data and a
+        fresh DB (already created with them) is left untouched."""
+        c = self.conn.cursor()
+        existing = {r["name"] for r in c.execute("PRAGMA table_info(posts)")}
+        if "strategic_relevance" not in existing:
+            c.execute("ALTER TABLE posts ADD COLUMN strategic_relevance INTEGER")
+        if "strategic_rationale" not in existing:
+            c.execute("ALTER TABLE posts ADD COLUMN strategic_rationale TEXT")
+        # Index created here (not in the executescript) because the column may
+        # not have existed when that ran on an older DB.
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_strategic "
+            "ON posts(strategic_relevance)"
+        )
+        # strategic_keywords table is CREATE IF NOT EXISTS above.
 
     # ── keyword / run bookkeeping ────────────────────────────────────
 
@@ -755,6 +788,202 @@ class PostDatabase:
             "hashtags": self.get_hashtags(keyword=keyword, limit=200),
             "places": self.get_places(keyword=keyword, limit=200),
         }
+
+    # ── strategic keywords (AI analysis lens) ────────────────────────
+
+    def get_strategic_keywords(self) -> list[str]:
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT keyword FROM strategic_keywords ORDER BY keyword"
+        )
+        return [r["keyword"] for r in rows]
+
+    def add_strategic_keyword(self, keyword: str) -> bool:
+        keyword = (keyword or "").strip()
+        if not keyword:
+            return False
+        conn = self.connect()
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO strategic_keywords (keyword) VALUES (?)",
+            (keyword,),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    def remove_strategic_keyword(self, keyword: str) -> None:
+        conn = self.connect()
+        conn.execute("DELETE FROM strategic_keywords WHERE keyword=?", (keyword,))
+        conn.commit()
+
+    # ── AI enrichment I/O ─────────────────────────────────────────────
+
+    def count_posts_needing_analysis(self) -> int:
+        """Posts with usable text but no strategic score yet.
+
+        Keyed on strategic_relevance IS NULL (NOT analysis_model) — posts that
+        already got scraper-time sentiment analysis still need a strategic
+        score, so they must be picked up by the enrich pass."""
+        conn = self.connect()
+        return conn.execute(
+            "SELECT COUNT(*) FROM posts "
+            "WHERE strategic_relevance IS NULL "
+            "AND text IS NOT NULL AND TRIM(text) <> ''"
+        ).fetchone()[0]
+
+    def get_posts_needing_analysis(
+        self, limit: int = 50, exclude_ids: Optional[set[int]] = None
+    ) -> list[dict]:
+        """A batch of un-enriched posts (id, platform, author, text) for the
+        LLM pass. `exclude_ids` lets the job skip posts the LLM couldn't score
+        this run so the same batch isn't refetched into an infinite loop."""
+        conn = self.connect()
+        sql = (
+            "SELECT id, platform, author_username, author_display_name, text "
+            "FROM posts WHERE strategic_relevance IS NULL "
+            "AND text IS NOT NULL AND TRIM(text) <> ''"
+        )
+        params: list[Any] = []
+        if exclude_ids:
+            placeholders = ",".join("?" for _ in exclude_ids)
+            sql += f" AND id NOT IN ({placeholders})"
+            params.extend(exclude_ids)
+        sql += " ORDER BY id LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in conn.execute(sql, params)]
+
+    def update_post_analysis(self, post_id: int, analysis: dict) -> None:
+        """Write AI enrichment back to a post. Unlike _update_non_null this
+        writes the strategic fields DIRECTLY so a genuine score of 0 persists
+        (0 would be treated as 'missing' by the non-null updater)."""
+        conn = self.connect()
+        cols = {
+            "sentiment": analysis.get("sentiment"),
+            "sentiment_score": analysis.get("sentiment_score"),
+            "entities_people": _json(analysis.get("entities_people")),
+            "entities_orgs": _json(analysis.get("entities_orgs")),
+            "entities_locations": _json(analysis.get("entities_locations")),
+            "topics": _json(analysis.get("topics")),
+            "language": analysis.get("language"),
+            "analysis_model": analysis.get("model_used"),
+            "strategic_relevance": analysis.get("strategic_relevance"),
+            "strategic_rationale": analysis.get("strategic_rationale"),
+        }
+        assignments = ",".join(f"{k}=?" for k in cols)
+        conn.execute(
+            f"UPDATE posts SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            [*cols.values(), post_id],
+        )
+        conn.commit()
+
+    def reset_strategic_scores(self) -> None:
+        """Clear all strategic scores so the next enrich re-runs from scratch —
+        used when the strategic keyword set changes (rescore=1)."""
+        conn = self.connect()
+        conn.execute(
+            "UPDATE posts SET strategic_relevance=NULL, strategic_rationale=NULL"
+        )
+        conn.commit()
+
+    def get_strategic_scores(self) -> dict[int, dict]:
+        """Map post_id -> {relevance, rationale} for every enriched post.
+        Used by the dashboard to overlay AI scores onto NLP-scored posts."""
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT id, strategic_relevance, strategic_rationale FROM posts "
+            "WHERE strategic_relevance IS NOT NULL"
+        )
+        return {
+            r["id"]: {
+                "relevance": r["strategic_relevance"],
+                "rationale": r["strategic_rationale"],
+            }
+            for r in rows
+        }
+
+    # ── strategic trends (read-only aggregation) ──────────────────────
+
+    def get_strategic_leaderboard(self, limit: int = 15) -> list[dict]:
+        """Accounts ranked by strategic footprint — avg & peak relevance over
+        their enriched posts, plus post count. Groups by author_username so it
+        works even for posts with no linked account row."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT
+                   COALESCE(author_username, author_display_name, '—') AS author,
+                   MAX(platform) AS platform,
+                   COUNT(*) AS posts,
+                   ROUND(AVG(strategic_relevance)) AS avg_rel,
+                   MAX(strategic_relevance) AS max_rel,
+                   SUM(strategic_relevance) AS total_rel
+               FROM posts
+               WHERE strategic_relevance IS NOT NULL
+                 AND COALESCE(author_username, author_display_name) IS NOT NULL
+               GROUP BY author
+               ORDER BY avg_rel DESC, posts DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [dict(r) for r in rows]
+
+    def get_strategic_timeline(self, min_relevance: int = 1) -> list[dict]:
+        """Strategic activity per day (posts with a real timestamp only).
+        Returns day, post count, and summed relevance for a time-series chart.
+        NULL-timestamp posts (a large share) are excluded by design — the UI
+        notes the coverage."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT substr(timestamp,1,10) AS day,
+                      COUNT(*) AS posts,
+                      SUM(strategic_relevance) AS total_rel,
+                      ROUND(AVG(strategic_relevance)) AS avg_rel
+               FROM posts
+               WHERE strategic_relevance IS NOT NULL
+                 AND strategic_relevance >= ?
+                 AND timestamp IS NOT NULL AND TRIM(timestamp) <> ''
+               GROUP BY day
+               ORDER BY day""",
+            (min_relevance,),
+        )
+        return [dict(r) for r in rows]
+
+    def get_strategic_sentiment_breakdown(self) -> list[dict]:
+        """Sentiment distribution across strategically-relevant posts
+        (relevance >= 46, i.e. clearly on-topic)."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT COALESCE(sentiment,'unknown') AS sentiment, COUNT(*) AS n
+               FROM posts
+               WHERE strategic_relevance IS NOT NULL AND strategic_relevance >= 46
+               GROUP BY sentiment
+               ORDER BY n DESC"""
+        )
+        return [dict(r) for r in rows]
+
+    def get_top_strategic_posts(self, limit: int = 12) -> list[dict]:
+        """The highest-scoring strategic posts, hydrated for the feed."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT * FROM posts
+               WHERE strategic_relevance IS NOT NULL
+               ORDER BY strategic_relevance DESC,
+                        COALESCE(timestamp, scraped_at, created_at) DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [self._hydrate_post(dict(r)) for r in rows]
+
+    def get_strategic_summary(self) -> dict:
+        """Headline numbers for the strategic page hero."""
+        conn = self.connect()
+        row = conn.execute(
+            """SELECT
+                   COUNT(*) AS enriched,
+                   SUM(CASE WHEN strategic_relevance >= 71 THEN 1 ELSE 0 END) AS high,
+                   SUM(CASE WHEN strategic_relevance >= 46 THEN 1 ELSE 0 END) AS relevant,
+                   ROUND(AVG(strategic_relevance)) AS avg_rel
+               FROM posts WHERE strategic_relevance IS NOT NULL"""
+        ).fetchone()
+        return dict(row) if row else {}
 
     # ── lifecycle ────────────────────────────────────────────────────
 
