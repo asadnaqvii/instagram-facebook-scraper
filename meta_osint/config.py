@@ -30,6 +30,31 @@ for _d in (DATA_DIR, MEDIA_DIR, SELECTOR_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
+# ── Database backend ─────────────────────────────────────────────────
+# 'sqlite' (default, local file) or 'mysql' (shared server — set the MYSQL_*
+# vars below). The rest of the app goes through database.get_database(), which
+# returns the right backend, so switching is purely config: copy the code +
+# data/media to another PC, point these at the same MySQL, and it runs.
+DB_BACKEND = os.getenv("META_OSINT_DB_BACKEND", "sqlite").lower()
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DB = os.getenv("MYSQL_DB", "")
+
+
+def mysql_dsn() -> dict:
+    """Connection kwargs for the MySQL driver."""
+    return {
+        "host": MYSQL_HOST,
+        "port": MYSQL_PORT,
+        "user": MYSQL_USER,
+        "password": MYSQL_PASSWORD,
+        "database": MYSQL_DB,
+    }
+
+
 # ── Browser / CDP ────────────────────────────────────────────────────
 # One Chrome instance per platform so their sessions never clash. Launch
 # them with the helper scripts in scripts/ (or manually with

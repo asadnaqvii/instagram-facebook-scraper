@@ -155,7 +155,12 @@ def _cmd_serve(args) -> None:
     from meta_osint.web.app import create_app
 
     app = create_app()
-    print(f"\nDashboard: http://localhost:{args.port}\n")
+    if config.DB_BACKEND == "mysql":
+        backend = f"MySQL @ {config.MYSQL_HOST}/{config.MYSQL_DB}"
+    else:
+        backend = f"SQLite @ {config.DB_PATH}"
+    print(f"\nDashboard: http://localhost:{args.port}")
+    print(f"Database:  {backend}\n")
     app.run(host="0.0.0.0", port=args.port, debug=args.debug)
 
 

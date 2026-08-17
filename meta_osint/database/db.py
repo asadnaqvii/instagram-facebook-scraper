@@ -16,11 +16,13 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from .. import config
 from ..models import (
     Account,
     Comment,
@@ -36,24 +38,159 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if isinstance(dt, datetime) else dt
 
 
+# ── dialect adapter ──────────────────────────────────────────────────
+#
+# The whole point: the ~30 query methods below are written once, in SQLite
+# style (`?` placeholders, `INSERT OR IGNORE`, `dict(row)` access). This thin
+# adapter lets those exact method bodies also run on MySQL, so switching
+# backends is pure config — no forked query code to drift out of sync.
+#
+# For MySQL it wraps PyMySQL's DictCursor and, on every execute():
+#   * rewrites `?` placeholders to `%s`
+#   * translates `INSERT OR IGNORE` -> `INSERT IGNORE`
+#   * returns rows that support r["col"], r[0], and dict(r) like sqlite3.Row
+# The connection object exposes `.execute(sql, params)` (like sqlite3) and
+# `.commit()` / `.cursor()`, so callers can't tell the difference.
+
+
+class _Row(dict):
+    """dict that also allows positional access (r[0]) and dict(r), matching the
+    subset of sqlite3.Row behaviour this codebase relies on."""
+
+    __slots__ = ("_order",)
+
+    def __init__(self, mapping):
+        super().__init__(mapping)
+        self._order = list(mapping.keys())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return super().__getitem__(self._order[key])
+        return super().__getitem__(key)
+
+    def keys(self):  # dict(_Row) preserves column order
+        return self._order
+
+
+_PLACEHOLDER_RE = re.compile(r"\?")
+
+
+def _to_mysql_sql(sql: str) -> str:
+    """Rewrite SQLite-flavoured SQL to MySQL for the shared method bodies."""
+    sql = sql.replace("INSERT OR IGNORE", "INSERT IGNORE")
+    sql = sql.replace("INSERT OR REPLACE", "REPLACE")
+    # `?` -> `%s`. No string literals in this codebase contain a bare `?`, so a
+    # blanket replace is safe and far simpler than a tokenizer.
+    sql = _PLACEHOLDER_RE.sub("%s", sql)
+    return sql
+
+
+class _MySQLCursor:
+    """Wraps a PyMySQL DictCursor to mimic the sqlite3 cursor surface used here:
+    execute() returns self, rows come back as _Row, iteration/fetch* work, and
+    lastrowid is exposed."""
+
+    def __init__(self, raw):
+        self._c = raw
+
+    def execute(self, sql, params=()):
+        if params:
+            params = tuple(_normalize_dt_param(p) for p in params)
+        self._c.execute(_to_mysql_sql(sql), params)
+        return self
+
+    def executemany(self, sql, seq):
+        seq = [tuple(_normalize_dt_param(p) for p in row) for row in seq]
+        self._c.executemany(_to_mysql_sql(sql), seq)
+        return self
+
+    def fetchone(self):
+        row = self._c.fetchone()
+        return _Row(row) if row is not None else None
+
+    def fetchall(self):
+        return [_Row(r) for r in self._c.fetchall()]
+
+    def __iter__(self):
+        for r in self._c.fetchall():
+            yield _Row(r)
+
+    @property
+    def lastrowid(self):
+        return self._c.lastrowid
+
+    @property
+    def rowcount(self):
+        return self._c.rowcount
+
+
+class _MySQLConn:
+    """sqlite3.Connection-compatible facade over a PyMySQL connection."""
+
+    def __init__(self, raw):
+        self._conn = raw
+
+    def execute(self, sql, params=()):
+        cur = _MySQLCursor(self._conn.cursor())
+        return cur.execute(sql, params)
+
+    def cursor(self):
+        return _MySQLCursor(self._conn.cursor())
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
 class PostDatabase:
-    def __init__(self, db_path: str | Path):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn: Optional[sqlite3.Connection] = None
+    def __init__(self, db_path: str | Path | None = None):
+        # backend chosen by config; 'mysql' ignores db_path (connects to the
+        # server) so every existing `PostDatabase(config.DB_PATH)` call site
+        # works unchanged on both backends.
+        self.backend = getattr(config, "DB_BACKEND", "sqlite")
+        self.db_path = Path(db_path) if db_path is not None else Path(config.DB_PATH)
+        if self.backend == "sqlite":
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = None
 
     # ── connection / schema ──────────────────────────────────────────
 
-    def connect(self) -> sqlite3.Connection:
-        if self.conn is None:
+    def connect(self):
+        if self.conn is not None:
+            return self.conn
+        if self.backend == "mysql":
+            self.conn = self._connect_mysql()
+        else:
             self.conn = sqlite3.connect(str(self.db_path))
             self.conn.row_factory = sqlite3.Row
             self.conn.execute("PRAGMA foreign_keys = ON")
             self.conn.execute("PRAGMA journal_mode = WAL")
-            self._create_schema()
+        self._create_schema()
         return self.conn
 
+    def _connect_mysql(self) -> "_MySQLConn":
+        try:
+            import pymysql
+            from pymysql.cursors import DictCursor
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError(
+                "MySQL backend selected but PyMySQL is not installed. "
+                "Run: pip install pymysql"
+            ) from e
+        raw = pymysql.connect(
+            charset="utf8mb4",
+            autocommit=False,
+            cursorclass=DictCursor,
+            **config.mysql_dsn(),
+        )
+        return _MySQLConn(raw)
+
     def _create_schema(self) -> None:
+        if self.backend == "mysql":
+            self._create_schema_mysql()
+            return
         c = self.conn.cursor()
         c.executescript(
             """
@@ -233,13 +370,42 @@ class PostDatabase:
         self._migrate()
         self.conn.commit()
 
+    def _create_schema_mysql(self) -> None:
+        """Apply schema_mysql.sql (idempotent — all CREATE TABLE IF NOT EXISTS)
+        so a fresh MySQL database gets the full 11-table schema. Harmless to run
+        every connect on an already-populated DB."""
+        sql_file = Path(__file__).resolve().parent / "schema_mysql.sql"
+        ddl = sql_file.read_text(encoding="utf-8")
+        raw = self.conn._conn  # underlying PyMySQL connection
+        with raw.cursor() as cur:
+            # Split on ';' at statement boundaries; skip blanks/comment-only.
+            for stmt in _split_sql_statements(ddl):
+                cur.execute(stmt)
+        raw.commit()
+        self._migrate()
+
     def _migrate(self) -> None:
         """Idempotent schema upgrades for DBs created before a column existed.
 
-        Safe to run every connect: each ALTER is guarded by a PRAGMA check, so
-        a populated DB copy gains the new columns without losing data and a
-        fresh DB (already created with them) is left untouched."""
+        SQLite path: guarded ALTERs (PRAGMA table_info). MySQL path: the
+        schema file already defines the strategic_* columns, so we only add
+        them if an older MySQL DB predates them (checked via information_schema).
+        Safe to run every connect."""
         c = self.conn.cursor()
+        if self.backend == "mysql":
+            existing = {
+                r["COLUMN_NAME"] if "COLUMN_NAME" in r else r["column_name"]
+                for r in c.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND table_name = 'posts'"
+                )
+            }
+            if "strategic_relevance" not in existing:
+                c.execute("ALTER TABLE posts ADD COLUMN strategic_relevance INT")
+            if "strategic_rationale" not in existing:
+                c.execute("ALTER TABLE posts ADD COLUMN strategic_rationale TEXT")
+            self.conn.commit()
+            return
         existing = {r["name"] for r in c.execute("PRAGMA table_info(posts)")}
         if "strategic_relevance" not in existing:
             c.execute("ALTER TABLE posts ADD COLUMN strategic_relevance INTEGER")
@@ -707,10 +873,7 @@ class PostDatabase:
         row["videos"] = [m for m in row["media"] if m.get("type") in ("video", "reel")]
         for jf in ("entities_people", "entities_orgs", "entities_locations", "topics"):
             if row.get(jf):
-                try:
-                    row[jf] = json.loads(row[jf])
-                except (json.JSONDecodeError, TypeError):
-                    row[jf] = []
+                row[jf] = _load_json_field(row[jf])
         return row
 
     def get_accounts(self, platform: Optional[str] = None, keyword: Optional[str] = None,
@@ -1024,6 +1187,53 @@ def _update_non_null(conn: sqlite3.Connection, table: str, row_id: int, cols: di
         f"UPDATE {table} SET {assignments} WHERE id=?",
         [*updates.values(), row_id],
     )
+
+
+def _split_sql_statements(ddl: str) -> list[str]:
+    """Split a multi-statement SQL script into individual statements for a
+    driver that executes one at a time. Strips line comments and blank
+    statements. The schema file has no ';' inside string literals, so a simple
+    split on ';' is safe here."""
+    lines = []
+    for line in ddl.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--") or not stripped:
+            continue
+        lines.append(line)
+    body = "\n".join(lines)
+    return [s.strip() for s in body.split(";") if s.strip()]
+
+
+_ISO_DT_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?([+-]\d{2}:?\d{2}|Z)?$"
+)
+
+
+def _normalize_dt_param(v):
+    """Convert an ISO-8601 datetime string (T-separated, possibly with tz) to
+    MySQL's `YYYY-MM-DD HH:MM:SS` so it lands cleanly in a DATETIME column.
+    Non-datetime values pass through untouched. Applied only on the MySQL
+    binding path — SQLite keeps ISO text as-is."""
+    if isinstance(v, str) and _ISO_DT_RE.match(v):
+        s = v.replace("T", " ")
+        # Drop timezone suffix and fractional seconds — DATETIME has neither.
+        s = re.sub(r"(\.\d+)?([+-]\d{2}:?\d{2}|Z)?$", "", s).strip()
+        return s
+    return v
+
+
+def _load_json_field(value):
+    """Decode a JSON column into a Python list. Handles both backends: SQLite
+    (and older PyMySQL) return the raw JSON string; some MySQL drivers return an
+    already-parsed list/dict. Returns [] on anything unusable."""
+    if value is None:
+        return []
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def _json(value: Any) -> Optional[str]:
