@@ -32,6 +32,11 @@ import os
 import sqlite3
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from .. import config
 from .db import PostDatabase
 

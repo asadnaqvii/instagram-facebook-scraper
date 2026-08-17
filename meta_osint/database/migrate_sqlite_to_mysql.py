@@ -34,6 +34,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# Make stdout UTF-8 so progress output never crashes on a legacy Windows
+# console (cp1252). Harmless elsewhere.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from .. import config
 
 # Tables in FK-safe insert order (parents before children).
@@ -153,7 +160,7 @@ def migrate(dry_run: bool = False, truncate: bool = False) -> None:
 
         mcur.executemany(sql, batch)
         total += len(batch)
-        note = f"  (paths→filenames: {', '.join(path_cols)})" if path_cols else ""
+        note = f"  (paths -> filenames: {', '.join(path_cols)})" if path_cols else ""
         print(f"  {table:<22} {len(batch)}{note}")
 
     mcur.execute("SET FOREIGN_KEY_CHECKS = 1")
