@@ -5,6 +5,21 @@
 
 {% if opened %}
 <div class="card" style="max-width:640px;">
+  {% if launched %}
+  <p style="font-size:15px;">🚀 Launched <strong>{{ platform|capitalize }}</strong>'s Chrome window
+     ({{ 'CDP port 9223' if platform == 'instagram' else 'CDP port 9222' }}) and opened its login page.</p>
+  <p class="muted" style="margin-top:var(--sp-3);">
+    A new Chrome window is starting. In it:
+  </p>
+  <ul class="muted" style="margin-top:var(--sp-2); line-height:1.8;">
+    <li>log in to {{ platform|capitalize }} (your session persists in its own profile), then</li>
+    <li>come back here — the status pill in the top bar turns green once you're in.</li>
+  </ul>
+  <p class="muted micro" style="margin-top:var(--sp-3);">
+    Chrome can take a few seconds to appear the first time. If nothing opens,
+    the launcher path may be wrong — see the manual command below.
+  </p>
+  {% else %}
   <p style="font-size:15px;">✅ Opened <strong>{{ platform|capitalize }}</strong>'s login page in its Chrome window
      ({{ 'port 9223' if platform == 'instagram' else 'port 9222' }}).</p>
   <p class="muted" style="margin-top:var(--sp-3);">
@@ -18,16 +33,21 @@
     When you're done, the status pill in the top bar will update within ~30s
     (or reload this page).
   </p>
+  {% endif %}
   <div style="margin-top:var(--sp-5); display:flex; gap:var(--sp-3);">
     <a href="{{ url_for('index') }}"><button>← Back to dashboard</button></a>
     <a href="{{ url_for('login_action', platform=platform) }}" class="btn-secondary" style="text-decoration:none;">Re-open login page</a>
   </div>
+  <details style="margin-top:var(--sp-4);">
+    <summary class="micro muted" style="cursor:pointer;">Launch manually instead</summary>
+    <pre class="mono" style="background:var(--bg-surface-2); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-3); margin-top:var(--sp-3);">meta_osint\scripts\start_chrome_{{ platform }}.bat</pre>
+  </details>
 </div>
 {% else %}
 <div class="card" style="max-width:640px; border-color:var(--threat-critical);">
-  <p style="font-size:15px;">⚠️ Couldn't open {{ platform|capitalize }}'s Chrome window.</p>
+  <p style="font-size:15px;">⚠️ Couldn't {{ 'launch' if launched else 'open' }} {{ platform|capitalize }}'s Chrome window.</p>
   <p class="muted" style="margin-top:var(--sp-3);">
-    Its Chrome isn't running. Launch it first:
+    Launch it manually:
   </p>
   <pre class="mono" style="background:var(--bg-surface-2); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-3); margin-top:var(--sp-3);">meta_osint\scripts\start_chrome_{{ platform }}.bat</pre>
   {% if error %}<p class="muted micro" style="margin-top:var(--sp-3);">Details: {{ error[:200] }}</p>{% endif %}

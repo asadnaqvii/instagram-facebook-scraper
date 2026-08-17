@@ -537,19 +537,80 @@ def create_app() -> Flask:
 
     @app.route("/login/<platform>")
     def login_action(platform):
-        """Point the platform's own Chrome window at its login page so the user
-        can log out / switch accounts / log back in there. The scraper never
-        handles the password itself — this just drives the browser to the page.
+        """Get the user to the platform's login page in its own Chrome window.
+
+        Two cases, handled automatically:
+          * Chrome already running (CDP port open) — just drive it to the login
+            page (log out / switch account / re-login there).
+          * Chrome NOT running — launch its start_chrome_<platform>.bat, which
+            opens Chrome on the right CDP port already pointed at the site's
+            login. No terminal needed.
+
+        The scraper never handles the password itself — this only opens the
+        page for the user to type into.
         """
         if platform not in config.PLATFORMS:
             return redirect(url_for("index"))
         url = ("https://www.instagram.com/accounts/login/" if platform == "instagram"
                else "https://www.facebook.com/login/")
-        opened, err = _drive_browser_to(platform, url)
+
+        port = (config.CDP_PORT_INSTAGRAM if platform == "instagram"
+                else config.CDP_PORT_FACEBOOK)
+        launched = False
+        if not _port_open(port):
+            # Chrome isn't up — launch it via the helper script (it opens the
+            # site itself, so no separate navigation is needed).
+            opened, err = _launch_chrome_script(platform)
+            launched = True
+        else:
+            opened, err = _drive_browser_to(platform, url)
         _STATUS_CACHE.update(ts=0.0, data=_STATUS_CACHE.get("data"))  # force re-check next poll
-        return render_template("login_action.html", platform=platform, opened=opened, error=err, target=url)
+        return render_template("login_action.html", platform=platform,
+                               opened=opened, error=err, target=url,
+                               launched=launched)
 
     return app
+
+
+def _port_open(port: int, timeout: float = 1.0) -> bool:
+    """Is something (Chrome's CDP) listening on this local port?"""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        s.close()
+
+
+def _launch_chrome_script(platform: str) -> tuple[bool, str | None]:
+    """Launch start_chrome_<platform>.bat to bring up that platform's CDP
+    Chrome (already pointed at the login page). Returns (started, error)."""
+    import subprocess
+
+    script = config.BASE_DIR / "scripts" / f"start_chrome_{platform}.bat"
+    if not script.exists():
+        return False, f"Launcher not found: {script}"
+    try:
+        # Fully detached so the request returns immediately and Chrome outlives
+        # it. DETACHED_PROCESS + no inherited handles keeps the web worker from
+        # blocking on the child. The .bat itself uses `start` to spawn Chrome,
+        # so it exits right away.
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        subprocess.Popen(
+            ["cmd", "/c", str(script)],
+            cwd=str(script.parent),
+            creationflags=flags,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        return True, None
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
 
 
 def _drive_browser_to(platform: str, url: str) -> tuple[bool, str | None]:
