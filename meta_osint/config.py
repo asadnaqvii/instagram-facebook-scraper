@@ -146,6 +146,15 @@ USER_AGENT = os.getenv(
 PLATFORMS = ("instagram", "facebook")
 
 
+# ── JSON API (for integrating the backend into other apps) ───────────
+# Optional shared-secret auth: set META_OSINT_API_KEY and callers send it as
+# `X-API-Key: <key>` (or `Authorization: Bearer <key>`). Empty = open (typical
+# for a local backend). Set META_OSINT_API_CORS=true to allow browser apps on
+# other origins to call the API.
+API_KEY = os.getenv("META_OSINT_API_KEY", "")
+API_CORS = os.getenv("META_OSINT_API_CORS", "false").lower() == "true"
+
+
 def as_dict() -> dict:
     """Snapshot the effective config (for the dashboard / debugging)."""
     return {

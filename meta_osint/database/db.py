@@ -841,6 +841,13 @@ class PostDatabase:
         rows = conn.execute(" ".join(sql), params).fetchall()
         return [self._hydrate_post(dict(r)) for r in rows]
 
+    def get_post(self, post_id: int) -> Optional[dict]:
+        """One hydrated post by primary key, or None. Used by the API's
+        /posts/<id> endpoint (avoids scanning all rows)."""
+        conn = self.connect()
+        row = conn.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
+        return self._hydrate_post(dict(row)) if row else None
+
     def _hydrate_post(self, row: dict) -> dict:
         conn = self.connect()
         pid = row["id"]
@@ -939,7 +946,13 @@ class PostDatabase:
                LEFT JOIN result_links rl ON rl.keyword_id=k.id
                GROUP BY k.id ORDER BY k.keyword"""
         )
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("posts", "accounts", "hashtags", "places"):
+                d[k] = _num(d.get(k)) or 0
+            out.append(d)
+        return out
 
     def get_keyword_detail(self, keyword: str, sort: str = "latest") -> dict:
         """Everything one keyword surfaced: its posts, accounts, hashtags,
@@ -1086,7 +1099,13 @@ class PostDatabase:
                LIMIT ?""",
             (limit,),
         )
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("posts", "avg_rel", "max_rel", "total_rel"):
+                d[k] = _num(d.get(k))
+            out.append(d)
+        return out
 
     def get_strategic_timeline(self, min_relevance: int = 1) -> list[dict]:
         """Strategic activity per day (posts with a real timestamp only).
@@ -1107,7 +1126,13 @@ class PostDatabase:
                ORDER BY day""",
             (min_relevance,),
         )
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("posts", "total_rel", "avg_rel"):
+                d[k] = _num(d.get(k))
+            out.append(d)
+        return out
 
     def get_strategic_sentiment_breakdown(self) -> list[dict]:
         """Sentiment distribution across strategically-relevant posts
@@ -1120,7 +1145,12 @@ class PostDatabase:
                GROUP BY sentiment
                ORDER BY n DESC"""
         )
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["n"] = _num(d.get("n"))
+            out.append(d)
+        return out
 
     def get_top_strategic_posts(self, limit: int = 12) -> list[dict]:
         """The highest-scoring strategic posts, hydrated for the feed."""
@@ -1146,7 +1176,14 @@ class PostDatabase:
                    ROUND(AVG(strategic_relevance)) AS avg_rel
                FROM posts WHERE strategic_relevance IS NOT NULL"""
         ).fetchone()
-        return dict(row) if row else {}
+        if not row:
+            return {}
+        d = dict(row)
+        # MySQL returns SUM()/ROUND() as Decimal/str; normalize to plain ints so
+        # the JSON API emits numbers, matching SQLite's behaviour.
+        for k in ("enriched", "high", "relevant", "avg_rel"):
+            d[k] = _num(d.get(k))
+        return d
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -1249,3 +1286,15 @@ def _bool(value: Optional[bool]) -> Optional[int]:
     if value is None:
         return None
     return 1 if value else 0
+
+
+def _num(value):
+    """Coerce a DB aggregate to a plain int (or None). MySQL returns
+    SUM()/ROUND()/AVG() as Decimal or str; SQLite returns int/float. This
+    normalizes both so the JSON API always emits numbers, not strings."""
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return value

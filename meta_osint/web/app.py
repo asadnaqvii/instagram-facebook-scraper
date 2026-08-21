@@ -569,6 +569,23 @@ def create_app() -> Flask:
                                opened=opened, error=err, target=url,
                                launched=launched)
 
+    # ── JSON API (for integrating the backend into other apps) ───────
+    # The API blueprint reuses the SAME JOBS registry + relevancy/media/job
+    # functions defined above, so the HTML dashboard and the API can never
+    # drift apart. Mounted at /api/v1.
+    from . import api as _api
+    _api.init_api(
+        jobs=JOBS,
+        attach_media_urls=_attach_media_urls,
+        attach_relevancy=_attach_relevancy,
+        related_keywords=_related_keywords,
+        run_enrich_job=_run_enrich_job,
+        run_scrape_job=_run_job,
+        scrape_config_cls=ScrapeConfig,
+    )
+    app.register_blueprint(_api.api, url_prefix="/api/v1")
+    _api.register_error_handlers(app)
+
     return app
 
 
