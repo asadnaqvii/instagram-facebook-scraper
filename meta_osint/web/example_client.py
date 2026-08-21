@@ -74,6 +74,7 @@ class MetaOsintClient:
     def post(self, post_id):              return self._get(f"/posts/{post_id}")
     def accounts(self, **q):              return self._get("/accounts", **q)
     def hashtags(self, **q):              return self._get("/hashtags", **q)
+    def places(self, **q):                return self._get("/places", **q)
     def keywords(self):                   return self._get("/keywords")
     def related_keywords(self):           return self._get("/keywords/related")
     def keyword(self, kw, sort="latest"): return self._get(f"/keywords/{kw}", sort=sort)
@@ -102,6 +103,10 @@ class MetaOsintClient:
     def jobs(self):                       return self._get("/jobs")
     def job(self, job_id):                return self._get(f"/jobs/{job_id}")
     def stop_job(self, job_id):           return self._post(f"/jobs/{job_id}/stop")
+    def stop_all_jobs(self):              return self._post("/jobs/stop-all")
+
+    # ── browser session ───────────────────────────────────────────────
+    def login_open(self, platform):      return self._post(f"/login/{platform}")
 
     def wait_for_job(self, job_id, poll=2.0, on_progress=None):
         """Block until a job finishes; returns the final job dict."""

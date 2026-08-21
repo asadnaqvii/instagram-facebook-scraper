@@ -43,7 +43,8 @@ _ctx: dict = {}
 
 
 def init_api(*, jobs, attach_media_urls, attach_relevancy, related_keywords,
-             run_enrich_job, run_scrape_job, scrape_config_cls):
+             run_enrich_job, run_scrape_job, scrape_config_cls,
+             open_login_page=None):
     _ctx.update(
         jobs=jobs,
         attach_media_urls=attach_media_urls,
@@ -52,6 +53,7 @@ def init_api(*, jobs, attach_media_urls, attach_relevancy, related_keywords,
         run_enrich_job=run_enrich_job,
         run_scrape_job=run_scrape_job,
         scrape_config_cls=scrape_config_cls,
+        open_login_page=open_login_page,
     )
 
 
@@ -154,6 +156,7 @@ def root():
             "GET  /api/v1/posts/<id>": "single hydrated post",
             "GET  /api/v1/accounts": "accounts (platform, keyword, limit)",
             "GET  /api/v1/hashtags": "hashtags (platform, keyword, limit)",
+            "GET  /api/v1/places": "locations/places (keyword, limit)",
             "GET  /api/v1/keywords": "search keywords with counts",
             "GET  /api/v1/keywords/related": "keyword co-occurrence clusters",
             "GET  /api/v1/keywords/<kw>": "full drill-down for one keyword",
@@ -171,6 +174,8 @@ def root():
             "GET  /api/v1/jobs": "active jobs",
             "GET  /api/v1/jobs/<id>": "one job (poll for progress)",
             "POST /api/v1/jobs/<id>/stop": "cooperatively stop a job",
+            "POST /api/v1/jobs/stop-all": "stop all running jobs",
+            "POST /api/v1/login/<platform>": "open a platform's login page in its Chrome",
         },
     })
 
@@ -192,6 +197,24 @@ def login_status():
         return _ok(get_status(deep=deep), deep=deep)
     except Exception as e:  # noqa: BLE001
         return _err(f"status check failed: {e}", 200, "status_error")
+
+
+@api.post("/login/<platform>")
+@require_key
+def login_open(platform):
+    """Open a platform's login page in its CDP Chrome (launching Chrome via the
+    start script if it isn't running). The scraper never handles the password —
+    this only gets the user to the page to log in / switch account. Mirrors the
+    dashboard's /login/<platform>."""
+    if platform not in config.PLATFORMS:
+        return _err(f"Unknown platform '{platform}'. Use: {', '.join(config.PLATFORMS)}",
+                    400, "bad_request")
+    opener = _ctx.get("open_login_page")
+    if not opener:
+        return _err("Login control not available.", 501, "not_implemented")
+    opened, err, launched = opener(platform)
+    return _ok({"platform": platform, "opened": opened,
+                "chrome_launched": launched, "error": err})
 
 
 @api.get("/stats")
@@ -269,6 +292,17 @@ def hashtags():
     with _db() as db:
         rows = db.get_hashtags(
             platform=request.args.get("platform") or None,
+            keyword=request.args.get("keyword") or None,
+            limit=min(_int_arg("limit", 200), 1000),
+        )
+    return _ok(rows, count=len(rows))
+
+
+@api.get("/places")
+@require_key
+def places():
+    with _db() as db:
+        rows = db.get_places(
             keyword=request.args.get("keyword") or None,
             limit=min(_int_arg("limit", 200), 1000),
         )
@@ -480,6 +514,19 @@ def jobs_list():
     active = [_job_public(j) for j in _ctx["jobs"].values()
               if j.get("status") in ("queued", "running")]
     return _ok(active, count=len(active))
+
+
+@api.post("/jobs/stop-all")
+@require_key
+def jobs_stop_all():
+    """Cooperatively stop every running/queued job (scrape + enrich)."""
+    n = 0
+    for j in _ctx["jobs"].values():
+        if j.get("status") in ("queued", "running"):
+            j["cancel"] = True
+            j.setdefault("log", []).append("[stop-all requested via API]")
+            n += 1
+    return _ok({"stopping": n})
 
 
 @api.get("/jobs/<job_id>")

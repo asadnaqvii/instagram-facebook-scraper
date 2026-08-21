@@ -50,6 +50,7 @@ URLs you can load directly.
 |---|---|
 | `GET /accounts` | Query: `platform`, `keyword`, `limit` |
 | `GET /hashtags` | Query: `platform`, `keyword`, `limit` |
+| `GET /places` | Locations/places. Query: `keyword`, `limit` |
 | `GET /keywords` | Search keywords with per-keyword counts |
 | `GET /keywords/related` | Keyword co-occurrence clusters |
 | `GET /keywords/<kw>` | Full drill-down (posts/accounts/hashtags/places) for one keyword |
@@ -75,6 +76,13 @@ URLs you can load directly.
 | `GET /jobs` | Active jobs |
 | `GET /jobs/<id>` | One job — poll `status` (`queued`\|`running`\|`done`\|`stopped`\|`error`) and `log[]` for progress |
 | `POST /jobs/<id>/stop` | Cooperatively stop a running job |
+| `POST /jobs/stop-all` | Stop all running/queued jobs |
+
+### Browser session control
+| Method & path | Purpose |
+|---|---|
+| `GET /login-status?deep=0\|1` | Per-platform Chrome/login status |
+| `POST /login/<platform>` | Open a platform's login page in its Chrome (launches Chrome if down). The scraper never handles the password — this just opens the page for the user |
 
 Enrichment and scraping run in the background; the response returns a job handle
 immediately (`202`). Poll `GET /jobs/<id>` until `status` is `done`/`error`.

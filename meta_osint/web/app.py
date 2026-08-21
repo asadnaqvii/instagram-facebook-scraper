@@ -573,6 +573,23 @@ def create_app() -> Flask:
     # The API blueprint reuses the SAME JOBS registry + relevancy/media/job
     # functions defined above, so the HTML dashboard and the API can never
     # drift apart. Mounted at /api/v1.
+    def _open_login_page(platform: str):
+        """Shared login-open logic for both the HTML route and the API:
+        launch the platform's Chrome if down, else drive it to the login page.
+        Returns (opened, error, chrome_launched)."""
+        url = ("https://www.instagram.com/accounts/login/" if platform == "instagram"
+               else "https://www.facebook.com/login/")
+        port = (config.CDP_PORT_INSTAGRAM if platform == "instagram"
+                else config.CDP_PORT_FACEBOOK)
+        launched = False
+        if not _port_open(port):
+            opened, err = _launch_chrome_script(platform)
+            launched = True
+        else:
+            opened, err = _drive_browser_to(platform, url)
+        _STATUS_CACHE.update(ts=0.0, data=_STATUS_CACHE.get("data"))
+        return opened, err, launched
+
     from . import api as _api
     _api.init_api(
         jobs=JOBS,
@@ -582,6 +599,7 @@ def create_app() -> Flask:
         run_enrich_job=_run_enrich_job,
         run_scrape_job=_run_job,
         scrape_config_cls=ScrapeConfig,
+        open_login_page=_open_login_page,
     )
     app.register_blueprint(_api.api, url_prefix="/api/v1")
     _api.register_error_handlers(app)
