@@ -12,9 +12,9 @@ It proves the whole path works:
 Setup — put these in a .env file next to where you run it (or export them):
 
     META_OSINT_DB_BACKEND=mysql
-    MYSQL_HOST=192.168.3.161
+    MYSQL_HOST=192.168.1.100
     MYSQL_PORT=3306
-    MYSQL_USER=AIUser01
+    MYSQL_USER=your_user
     MYSQL_PASSWORD=...
     MYSQL_DB=your_db
 

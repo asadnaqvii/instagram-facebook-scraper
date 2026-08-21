@@ -4,7 +4,7 @@ Credentials are read from the environment or a local `.env` file — never
 hard-coded and never passed on the command line (where they'd land in shell
 history). Populate these:
 
-    MYSQL_HOST         e.g. 192.168.3.161   (default 127.0.0.1)
+    MYSQL_HOST         e.g. 192.168.1.100   (default 127.0.0.1)
     MYSQL_PORT         default 3306
     MYSQL_USER
     MYSQL_PASSWORD
@@ -13,9 +13,9 @@ history). Populate these:
 
 Option A — a `.env` file next to where you run it:
 
-    MYSQL_HOST=192.168.3.161
+    MYSQL_HOST=192.168.1.100
     MYSQL_PORT=3306
-    MYSQL_USER=AIUser01
+    MYSQL_USER=your_user
     MYSQL_PASSWORD=CHANGEME
     MYSQL_DB=your_db
     MYSQL_FOCUS_TABLE=meta_scrapper
