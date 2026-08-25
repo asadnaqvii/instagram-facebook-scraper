@@ -5,9 +5,17 @@ A keyword-driven scraper that extracts the full breadth of public content from
 locations, account info, comments, shares, likes, views — into a local SQLite
 database, with a web dashboard to browse it.
 
-> **New here?** The fastest path is **[`SETUP.md`](SETUP.md)** — on Windows you
-> can literally double-click **`run.bat`** and it installs everything, opens
-> Chrome to log in, and starts the dashboard. **Ollama is not required.**
+> **New here?**
+> - **Windows, quickest:** **[`SETUP.md`](SETUP.md)** — double-click **`run.bat`**;
+>   it installs everything, opens Chrome to log in, and starts the dashboard.
+> - **Linux server (full deploy — DB, Ollama, API, scraping):**
+>   **[`SETUP_LINUX.md`](SETUP_LINUX.md)** — the complete from-scratch guide.
+> - **Handing the backend to another app/team:** **[`MIGRATION.md`](MIGRATION.md)**
+>   and the JSON API in **[`meta_osint/web/API.md`](meta_osint/web/API.md)**.
+> - **Headless scraping details (Xvfb, VNC login):** **[`LINUX_SCRAPING.md`](LINUX_SCRAPING.md)**.
+>
+> Ollama is only needed for the AI **enrichment** feature — basic scraping and
+> browsing work without it.
 
 It is built to survive Meta's constant DOM churn (the thing that makes naïve
 selector-based scrapers silently return empty results):
