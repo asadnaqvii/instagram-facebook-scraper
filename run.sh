@@ -22,14 +22,25 @@ echo " [1/5] Python found."
 
 # 2. Dependencies
 echo " [2/5] Installing Python packages (first run only)..."
-python3 -m pip install --quiet --disable-pip-version-check -r meta_osint/requirements.txt
+python3 -m pip install --quiet --disable-pip-version-check -r requirements.txt
 
 # 3. Playwright browser
 echo " [3/5] Ensuring Playwright browser is installed..."
 python3 -m playwright install chromium >/dev/null 2>&1 || true
 
+# 3b. Headless check — Chrome needs a display; on a server use Xvfb.
+if [ -z "${DISPLAY:-}" ]; then
+  echo
+  echo " [!] \$DISPLAY is not set — Chrome cannot render on a headless server."
+  echo "     Start a virtual display first, then re-run:"
+  echo "       export DISPLAY=:99"
+  echo "       Xvfb :99 -screen 0 1920x1080x24 & fluxbox &"
+  echo "     (see LINUX_SCRAPING.md). Continuing anyway..."
+  echo
+fi
+
 # 4. Launch Chrome per platform
-echo " [4/5] Opening Chrome windows for Facebook (9222) and Instagram (9223)..."
+echo " [4/5] Opening Chrome windows for Facebook (${CDP_PORT_FACEBOOK:-9222}) and Instagram (${CDP_PORT_INSTAGRAM:-9223})..."
 echo
 echo "       >>> LOG IN to Facebook and Instagram in the two windows that open."
 echo "       >>> Leave both windows OPEN. Complete any 2FA."
@@ -44,8 +55,8 @@ sleep 20
 echo " [5/5] Starting the dashboard..."
 echo
 echo " ============================================================"
-echo "   Dashboard:  http://localhost:5000"
+echo "   Dashboard:  http://localhost:${PORT:-5000}"
 echo " ============================================================"
 echo
-( sleep 2; (command -v open >/dev/null && open http://localhost:5000) || (command -v xdg-open >/dev/null && xdg-open http://localhost:5000) ) >/dev/null 2>&1 &
-python3 -m meta_osint.main serve --port 5000
+( sleep 2; (command -v open >/dev/null && open http://localhost:${PORT:-5000}) || (command -v xdg-open >/dev/null && xdg-open http://localhost:${PORT:-5000}) ) >/dev/null 2>&1 &
+python3 -m meta_osint.main serve --port "${PORT:-5000}"
