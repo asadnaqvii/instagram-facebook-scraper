@@ -23,9 +23,15 @@
 set -uo pipefail
 
 # platform:port:profile
+# Ports come from the SAME env vars the scraper reads (config.py), so the
+# launcher and the app can never disagree. Override in .env or the shell:
+#   CDP_PORT_FACEBOOK=9330  CDP_PORT_INSTAGRAM=9331
+FB_PORT="${CDP_PORT_FACEBOOK:-9222}"
+IG_PORT="${CDP_PORT_INSTAGRAM:-9223}"
+
 TARGETS=(
-  "facebook:9222:chrome-facebook"
-  "instagram:9223:chrome-instagram"
+  "facebook:${FB_PORT}:chrome-facebook"
+  "instagram:${IG_PORT}:chrome-instagram"
 )
 
 CHROME_BIN="${CHROME:-google-chrome}"
