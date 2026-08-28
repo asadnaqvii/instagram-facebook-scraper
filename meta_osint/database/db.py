@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -38,6 +38,17 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if isinstance(dt, datetime) else dt
 
 
+def _dt_to_str(v):
+    """MySQL DATETIME/DATE -> ISO string (SQLite stores these as text already).
+    Uses a space separator to match SQLite's stored format, so `timestamp[:10]`
+    still yields the date. Leaves everything else untouched."""
+    if isinstance(v, datetime):
+        return v.isoformat(sep=" ")
+    if isinstance(v, date):
+        return v.isoformat()
+    return v
+
+
 # ── dialect adapter ──────────────────────────────────────────────────
 #
 # The whole point: the ~30 query methods below are written once, in SQLite
@@ -55,13 +66,19 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
 
 class _Row(dict):
     """dict that also allows positional access (r[0]) and dict(r), matching the
-    subset of sqlite3.Row behaviour this codebase relies on."""
+    subset of sqlite3.Row behaviour this codebase relies on.
+
+    Also normalizes MySQL DATETIME/DATE columns (which PyMySQL returns as Python
+    datetime/date objects) to ISO strings, so they behave exactly like SQLite's
+    text timestamps. Without this, template/JSON code that treats a timestamp as
+    a string (e.g. `timestamp[:10]`) crashes only on the MySQL backend."""
 
     __slots__ = ("_order",)
 
     def __init__(self, mapping):
-        super().__init__(mapping)
-        self._order = list(mapping.keys())
+        norm = {k: _dt_to_str(v) for k, v in mapping.items()}
+        super().__init__(norm)
+        self._order = list(norm.keys())
 
     def __getitem__(self, key):
         if isinstance(key, int):
