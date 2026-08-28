@@ -92,10 +92,16 @@ class _Row(dict):
 _PLACEHOLDER_RE = re.compile(r"\?")
 
 
+_IS_PARAM_RE = re.compile(r"\bIS\s+\?", re.IGNORECASE)
+
+
 def _to_mysql_sql(sql: str) -> str:
     """Rewrite SQLite-flavoured SQL to MySQL for the shared method bodies."""
     sql = sql.replace("INSERT OR IGNORE", "INSERT IGNORE")
     sql = sql.replace("INSERT OR REPLACE", "REPLACE")
+    # SQLite allows `col IS ?` as a null-safe compare; MySQL rejects it
+    # (IS only takes NULL/TRUE/FALSE). `<=>` is MySQL's null-safe equality.
+    sql = _IS_PARAM_RE.sub("<=> ?", sql)
     # `?` -> `%s`. No string literals in this codebase contain a bare `?`, so a
     # blanket replace is safe and far simpler than a tokenizer.
     sql = _PLACEHOLDER_RE.sub("%s", sql)
