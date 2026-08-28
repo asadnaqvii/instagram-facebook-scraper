@@ -66,10 +66,17 @@ CDP_PORT_INSTAGRAM = int(os.getenv("CDP_PORT_INSTAGRAM", "9223"))
 BROWSER_TIMEOUT_MS = int(os.getenv("BROWSER_TIMEOUT_MS", "60000"))
 
 
+# Chrome binds its CDP port to IPv4 only. On hosts where "localhost" resolves to
+# IPv6 (::1) first, connecting to "http://localhost:PORT" fails with
+# ECONNREFUSED ::1:PORT even though Chrome is running — so default to the
+# explicit IPv4 loopback. Override with CDP_HOST if Chrome runs elsewhere.
+CDP_HOST = os.getenv("CDP_HOST", "127.0.0.1")
+
+
 def cdp_endpoint(platform: str) -> str:
     """CDP URL for a platform ('facebook' | 'instagram')."""
     port = CDP_PORT_INSTAGRAM if platform == "instagram" else CDP_PORT_FACEBOOK
-    return f"http://localhost:{port}"
+    return f"http://{CDP_HOST}:{port}"
 
 
 # ── Scraping behaviour ───────────────────────────────────────────────
