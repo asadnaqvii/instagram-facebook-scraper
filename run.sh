@@ -49,6 +49,16 @@ OLLAMA="${OLLAMA_URL:-http://localhost:11434}"
 PROFILE_BASE="${META_OSINT_CHROME_BASE:-$HOME/.meta-osint}"
 PY="${PYTHON:-python3}"
 
+# Chrome is an FD hog (500-1500 file descriptors per browser). The common
+# 1024 default is easily exhausted by two browsers plus whatever else runs
+# on the box, which shows up as renderer crashes / IndexedDB write errors
+# rather than a clear 'too many open files'. Raise it for this session.
+FD_WANT="${FD_LIMIT:-65535}"
+FD_CUR="$(ulimit -n 2>/dev/null || echo 1024)"
+if [ "$FD_CUR" != "unlimited" ] && [ "$FD_CUR" -lt "$FD_WANT" ] 2>/dev/null; then
+  ulimit -n "$FD_WANT" 2>/dev/null || true
+fi
+
 hr() { echo " ------------------------------------------------------------"; }
 echo
 echo " ============================================================"

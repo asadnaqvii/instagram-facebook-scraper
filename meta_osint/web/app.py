@@ -5,6 +5,7 @@ to, and launches scrape jobs in a background thread via the orchestrator.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -634,15 +635,28 @@ def _launch_chrome_script(platform: str) -> tuple[bool, str | None]:
         flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
                  | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                  | getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        subprocess.Popen(
-            ["cmd", "/c", str(script)],
+        # On Windows run the .bat through cmd; elsewhere exec the .sh directly.
+        if os.name == "nt":
+            argv = ["cmd", "/c", str(script)]
+        else:
+            argv = ["bash", str(script)]
+        proc = subprocess.Popen(
+            argv,
             cwd=str(script.parent),
             creationflags=flags,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            start_new_session=(os.name != "nt"),
         )
+        # Reap it so the launcher doesn't linger as a zombie holding a PID/FD
+        # slot. The script backgrounds Chrome itself, so it exits immediately;
+        # Chrome survives because it's in its own session.
+        try:
+            proc.wait(timeout=15)
+        except Exception:
+            pass
         return True, None
     except Exception as e:  # noqa: BLE001
         return False, str(e)
