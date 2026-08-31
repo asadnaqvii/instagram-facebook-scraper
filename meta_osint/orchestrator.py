@@ -138,6 +138,13 @@ async def scrape_platform(
                     _log(progress, f"[{platform}] {kw!r} attempt {attempt} failed: {str(e)[:120]}")
                     if attempt == 1:
                         # Try to revive the browser page for the retry + next keywords.
+                        # Close the dead one first — otherwise every failed keyword
+                        # orphans a tab in Chrome for the rest of the run (a real
+                        # memory leak when many keywords fail).
+                        try:
+                            await manager.close_page(page)
+                        except Exception:
+                            pass
                         try:
                             page = await manager.new_page()
                         except Exception as e2:

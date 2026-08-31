@@ -61,6 +61,22 @@ class BrowserManager:
         self._own_pages.append(page)
         return page
 
+    async def close_page(self, page: Page) -> None:
+        """Close a single tab we opened and stop tracking it.
+
+        Used when a page dies mid-run and is replaced: without this the dead
+        tab stays open in Chrome until the whole run ends, so a batch with many
+        failing keywords steadily eats memory."""
+        try:
+            if not page.is_closed():
+                await page.close()
+        except Exception:
+            pass
+        try:
+            self._own_pages.remove(page)
+        except ValueError:
+            pass
+
     async def close(self) -> None:
         # Close only the tabs we opened; leave the user's browser running.
         for page in self._own_pages:

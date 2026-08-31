@@ -136,6 +136,11 @@ else
     nohup "$CHROME" --remote-debugging-port="$1" --user-data-dir="$2" \
       --no-first-run --no-default-browser-check \
       --disable-gpu --disable-dev-shm-usage --log-level=3 \
+      --disable-extensions --disable-background-networking \
+      --disable-background-timer-throttling --disable-renderer-backgrounding \
+      --disable-backgrounding-occluded-windows --disable-sync \
+      --disable-component-update --mute-audio \
+      --js-flags="--max-old-space-size=${CHROME_HEAP_MB:-512}" \
       "$3" > "$HOME/chrome-$4.log" 2>&1 &
     echo "       $4: launching on $1 (log ~/chrome-$4.log)"
   }
