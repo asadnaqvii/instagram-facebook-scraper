@@ -156,25 +156,65 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                         // We keep the meaningful id params and drop FB's tracking
                         // junk (__cft__, __tn__, set, etc.).
                         let postUrl = '';
-                        const link = art.querySelector(
-                            'a[href*="/posts/"], a[href*="/reel/"], a[href*="/videos/"], a[href*="/permalink/"], ' +
-                            'a[href*="/watch"], a[href*="story_fbid"], a[href*="/photo/"], a[href*="fbid="]'
-                        );
-                        if (link) {
-                            let href = link.href || link.getAttribute('href') || '';
-                            if (href && !href.startsWith('http')) href = 'https://www.facebook.com' + href;
+                        // Candidate permalink shapes, widest first. FB mixes many
+                        // forms in one feed and adds new ones (e.g. /share/p/),
+                        // so a narrow list silently drops ~half the results.
+                        const LINK_SEL = [
+                            'a[href*="/posts/"]', 'a[href*="/permalink/"]',
+                            'a[href*="/reel/"]', 'a[href*="/videos/"]', 'a[href*="/video.php"]',
+                            'a[href*="/watch"]', 'a[href*="story_fbid"]', 'a[href*="/story.php"]',
+                            'a[href*="/photo/"]', 'a[href*="/photo.php"]', 'a[href*="fbid="]',
+                            'a[href*="/groups/"][href*="/posts/"]',
+                            'a[href*="/share/p/"]', 'a[href*="/share/v/"]', 'a[href*="/share/r/"]',
+                            'a[href*="pfbid"]', 'a[href*="/events/"]', 'a[href*="/notes/"]'
+                        ].join(', ');
+
+                        const normalize = (raw) => {
+                            let href = raw || '';
+                            if (!href) return '';
+                            if (href.startsWith('//')) href = 'https:' + href;
+                            else if (href.startsWith('/')) href = 'https://www.facebook.com' + href;
+                            if (!href.startsWith('http')) return '';
+                            // Ignore obvious non-permalinks.
+                            if (/\/(login|privacy|policies|help|settings|hashtag)\//.test(href)) return '';
                             try {
                                 const u = new URL(href);
-                                // Keep only identity params.
+                                if (!/facebook\.com$|fb\.watch$/.test(u.hostname.replace(/^m\.|^web\./, ''))
+                                    && !u.hostname.endsWith('facebook.com')) return '';
                                 const keep = new URLSearchParams();
                                 for (const k of ['fbid','story_fbid','id','v','set']) {
                                     if (u.searchParams.has(k)) keep.set(k, u.searchParams.get(k));
                                 }
                                 const qs = keep.toString();
-                                postUrl = u.origin + u.pathname + (qs ? '?' + qs : '');
+                                return u.origin + u.pathname + (qs ? '?' + qs : '');
                             } catch (e) {
-                                postUrl = href.split('?')[0];
+                                return href.split('?')[0];
                             }
+                        };
+
+                        // 1) Any matching anchor inside the article.
+                        for (const a of art.querySelectorAll(LINK_SEL)) {
+                            const cand = normalize(a.href || a.getAttribute('href'));
+                            if (cand) { postUrl = cand; break; }
+                        }
+                        // 2) Fallback: the timestamp link. FB renders the post date
+                        // as an <a> whose text is a relative time ("5h", "2 d") and
+                        // which points at the canonical permalink — often the only
+                        // link present on text-only posts.
+                        if (!postUrl) {
+                            for (const a of art.querySelectorAll('a[role="link"], a[href]')) {
+                                const t = (a.textContent || '').trim();
+                                if (!t || t.length > 24) continue;
+                                if (!/^(just now|yesterday|\d+\s*(s|m|h|d|w|y|min|hr|hrs|mins|hours?|days?|weeks?|years?)\b)/i.test(t)
+                                    && !/^\d{1,2}\s+\w+/.test(t)) continue;
+                                const cand = normalize(a.href || a.getAttribute('href'));
+                                if (cand) { postUrl = cand; break; }
+                            }
+                        }
+                        // 3) Last resort: aria-label="..." permalink anchors.
+                        if (!postUrl) {
+                            const al = art.querySelector('a[aria-label*="ermalink"], a[aria-label*="Full story"]');
+                            if (al) postUrl = normalize(al.href || al.getAttribute('href'));
                         }
 
                         const images = [];
