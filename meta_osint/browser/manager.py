@@ -10,7 +10,9 @@ exactly why the earlier DOM scraper produced empty output.
 from __future__ import annotations
 
 import asyncio
+import math
 import random
+import time
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
@@ -111,26 +113,131 @@ class BrowserManager:
 # ── human-like helpers usable from any extractor ─────────────────────
 
 
+# ── behavioural model ────────────────────────────────────────────────
+#
+# Uniform random delays are themselves a fingerprint: real humans produce a
+# right-skewed distribution (mostly quick, occasionally very slow), vary their
+# pace over a session, and don't act with millisecond-flat regularity. These
+# helpers reproduce that:
+#
+#   * log-normal delays  — right-skewed like real inter-action timing
+#   * session tempo      — each run gets a persistent "this person is fast /
+#                          slow today" multiplier, so runs differ from each other
+#   * fatigue drift      — pace gradually slows the longer a session runs
+#   * micro-jitter       — sub-second noise so no two waits are identical
+#   * attention breaks   — occasional long pauses (distraction / reading)
+#   * variable scrolling — differing distances, easing, overshoot + scroll-back
+#   * idle mouse motion  — humans move the pointer even when not clicking
+
+# Per-session tempo: some people are just faster. Drawn once per process.
+_SESSION_TEMPO = random.uniform(0.80, 1.35)
+_SESSION_START = time.monotonic()
+_ACTION_COUNT = 0
+
+
+def _fatigue() -> float:
+    """People slow down as a session wears on. Caps at +45%."""
+    mins = (time.monotonic() - _SESSION_START) / 60.0
+    return min(1.0 + mins * 0.012, 1.45)
+
+
+def _lognormal_delay(lo: float, hi: float) -> float:
+    """A right-skewed sample in roughly [lo, hi] — most values near the low
+    end with an occasional long tail, which is how human pauses actually
+    distribute. Uniform noise would look machine-made under analysis."""
+    mid = (lo + hi) / 2.0
+    # sigma controls the tail; mu places the median near the low-middle.
+    val = random.lognormvariate(math.log(max(mid * 0.72, 0.05)), 0.42)
+    # Keep it sane but allow a rare genuine outlier past `hi`.
+    val = max(lo * 0.75, min(val, hi * 1.8))
+    return val
+
+
 async def human_delay(kind: str = "action", platform: str | None = None) -> None:
+    """Pause the way a person would between actions."""
+    global _ACTION_COUNT
+    _ACTION_COUNT += 1
+
     if kind == "scroll":
         lo, hi = config.MIN_SCROLL_DELAY_S, config.MAX_SCROLL_DELAY_S
     else:
         lo, hi = config.MIN_ACTION_DELAY_S, config.MAX_ACTION_DELAY_S
-    # Instagram is stricter — pace it slower.
     if platform == "instagram":
         lo *= config.IG_DELAY_MULTIPLIER
         hi *= config.IG_DELAY_MULTIPLIER
-    await asyncio.sleep(random.uniform(lo, hi))
+
+    delay = _lognormal_delay(lo, hi) * _SESSION_TEMPO * _fatigue()
+    # Micro-jitter: never emit a suspiciously round interval.
+    delay += random.uniform(-0.12, 0.28)
+    delay = max(0.25, delay)
+
+    # Attention break — glanced at something else, read a comment, replied.
+    if random.random() < config.HUMAN_BREAK_CHANCE:
+        delay += random.uniform(*config.HUMAN_BREAK_RANGE_S)
+
+    # Rarely, a proper distraction (phone call, tab switch).
+    if random.random() < config.HUMAN_LONG_BREAK_CHANCE:
+        delay += random.uniform(*config.HUMAN_LONG_BREAK_RANGE_S)
+
+    await asyncio.sleep(delay)
+
+
+async def human_mouse(page: Page) -> None:
+    """Drift the pointer a little. Real sessions have constant small mouse
+    movement; a page that receives zero pointer events while scrolling for
+    minutes is an obvious automation signal."""
+    if random.random() > config.HUMAN_MOUSE_CHANCE:
+        return
+    try:
+        vp = page.viewport_size or {"width": 1280, "height": 800}
+        x = random.uniform(vp["width"] * 0.15, vp["width"] * 0.85)
+        y = random.uniform(vp["height"] * 0.15, vp["height"] * 0.85)
+        # steps>1 makes Playwright interpolate — a curve, not a teleport.
+        await page.mouse.move(x, y, steps=random.randint(6, 18))
+    except Exception:
+        pass
 
 
 async def scroll_page(page: Page, times: int, platform: str | None = None) -> None:
-    """Scroll down `times` steps with human-ish pauses and occasional pauses."""
+    """Scroll like a person: variable distance, easing, overshoot, re-reads."""
     for i in range(times):
-        await page.evaluate(f"window.scrollBy(0, {config.SCROLL_INCREMENT_PX})")
+        base = config.SCROLL_INCREMENT_PX
+        # Distance varies a lot between flicks.
+        dist = int(base * random.uniform(0.55, 1.5))
+
+        # Split the flick into a few eased steps rather than one jump.
+        steps = random.randint(2, 5)
+        for sidx in range(steps):
+            frac = (sidx + 1) / steps
+            # ease-out: fast start, slow finish (a real flick decelerates)
+            eased = 1 - (1 - frac) ** 2
+            target = int(dist * eased)
+            try:
+                await page.evaluate(
+                    "(y) => window.scrollBy({top: y, behavior: 'auto'})",
+                    max(1, target // steps + random.randint(-12, 12)),
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(random.uniform(0.04, 0.16))
+
+        await human_mouse(page)
         await human_delay("scroll", platform)
-        # Occasional longer pause, as a person skimming would.
-        if random.random() < 0.15:
-            await asyncio.sleep(random.uniform(1.0, 2.5))
+
+        # Scroll back up a little — re-reading something that caught the eye.
+        if random.random() < config.HUMAN_SCROLLBACK_CHANCE:
+            try:
+                await page.evaluate(
+                    "(y) => window.scrollBy({top: -y, behavior: 'auto'})",
+                    int(base * random.uniform(0.2, 0.6)),
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(random.uniform(0.6, 2.2))
+
+        # Pause to actually read something.
+        if random.random() < 0.18:
+            await asyncio.sleep(random.uniform(1.0, 3.5))
 
 
 # Per-platform escalating backoff after a rate-limit hit.

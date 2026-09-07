@@ -11,6 +11,7 @@ first keyword benefits the rest of the run.
 from __future__ import annotations
 
 import asyncio
+import random as _random
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -155,6 +156,16 @@ async def scrape_platform(
             if result is None:
                 result = SearchResult(platform=Platform(platform), keyword=kw, error="crashed: unknown")
                 result.finished_at = _now_iso()
+
+            # Pause between keywords. A real person doesn't fire searches
+            # back-to-back at a fixed interval; this also spreads load so a
+            # multi-keyword run is far less likely to trip rate limiting.
+            if kw != cfg.keywords[-1]:
+                _lo, _hi = config.HUMAN_KEYWORD_PAUSE_S
+                if platform == "instagram":
+                    _lo *= config.IG_DELAY_MULTIPLIER
+                    _hi *= config.IG_DELAY_MULTIPLIER
+                await asyncio.sleep(_random.uniform(_lo, _hi))
 
             counts = store_search_result(db, result, healer=healer, run_id=run_id, analyze=cfg.analyze)
 

@@ -102,7 +102,34 @@ IG_PER_POST_COOLDOWN_S = float(os.getenv("IG_PER_POST_COOLDOWN_S", "4.0"))
 
 # Cap IG posts-per-keyword lower than the global default, so each keyword is a
 # smaller burst. Set to 0 to use the requested max_posts unchanged.
-IG_MAX_POSTS_CAP = int(os.getenv("IG_MAX_POSTS_CAP", "8"))
+IG_MAX_POSTS_CAP = int(os.getenv("IG_MAX_POSTS_CAP", "25"))
+
+# ── Human-behaviour simulation ───────────────────────────────────────
+# Uniform-random timing is itself detectable. These shape the delay model in
+# browser/manager.py so a session looks like a distracted person rather than a
+# metronome. Raise the break chances if you want to look even more casual
+# (slower); lower them for speed at some risk.
+HUMAN_BREAK_CHANCE = float(os.getenv("HUMAN_BREAK_CHANCE", "0.14"))
+HUMAN_BREAK_RANGE_S = (
+    float(os.getenv("HUMAN_BREAK_MIN_S", "2.0")),
+    float(os.getenv("HUMAN_BREAK_MAX_S", "7.0")),
+)
+# Rare, longer distraction (phone call, another tab).
+HUMAN_LONG_BREAK_CHANCE = float(os.getenv("HUMAN_LONG_BREAK_CHANCE", "0.035"))
+HUMAN_LONG_BREAK_RANGE_S = (
+    float(os.getenv("HUMAN_LONG_BREAK_MIN_S", "15.0")),
+    float(os.getenv("HUMAN_LONG_BREAK_MAX_S", "45.0")),
+)
+# Chance of an idle mouse drift per scroll step, and of scrolling back up to
+# re-read something.
+HUMAN_MOUSE_CHANCE = float(os.getenv("HUMAN_MOUSE_CHANCE", "0.55"))
+HUMAN_SCROLLBACK_CHANCE = float(os.getenv("HUMAN_SCROLLBACK_CHANCE", "0.12"))
+# Pause between keywords so a multi-keyword run isn't a uniform march.
+HUMAN_KEYWORD_PAUSE_S = (
+    float(os.getenv("HUMAN_KEYWORD_PAUSE_MIN_S", "4.0")),
+    float(os.getenv("HUMAN_KEYWORD_PAUSE_MAX_S", "16.0")),
+)
+
 
 # When a 429 (rate limit) is detected, pause this long before continuing.
 # Doubles on repeated hits (capped). This is what stops the scraper from

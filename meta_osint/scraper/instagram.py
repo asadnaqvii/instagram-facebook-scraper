@@ -140,7 +140,11 @@ async def extract_profile(page: Page, username: str) -> Account:
 async def collect_post_links(page: Page, limit: int) -> list[str]:
     """Scroll a profile/hashtag grid and gather /p/ and /reel/ links."""
     links: dict[str, None] = {}
-    scrolls = max(limit // 10, 3)
+    # An IG grid lazy-loads roughly 4-6 tiles per scroll, so `limit // 10` was
+    # far too few to ever reach a higher cap (3 scrolls could never surface 25
+    # links). Scroll generously — the loop breaks as soon as we have enough.
+    scrolls = min(max(limit // 3 + 3, 6), config.MAX_SCROLLS)
+    stagnant = 0
     for _ in range(scrolls):
         found = await page.evaluate(
             r"""
@@ -154,10 +158,16 @@ async def collect_post_links(page: Page, limit: int) -> list[str]:
             }
             """
         )
+        before = len(links)
         for href in found:
             full = absolute_url(href, "instagram")
             links.setdefault(full, None)
         if len(links) >= limit:
+            break
+        # If two consecutive scrolls surface nothing new we've hit the end of
+        # the grid (or IG stopped serving) — stop rather than spin.
+        stagnant = stagnant + 1 if len(links) == before else 0
+        if stagnant >= 2:
             break
         await scroll_page(page, 1, "instagram")
     return list(links.keys())[:limit]
