@@ -567,6 +567,13 @@ async def search_keyword(
             # Cap IG posts-per-keyword so each keyword is a smaller burst.
             ig_cap = config.IG_MAX_POSTS_CAP or max_posts
             links = await collect_post_links(page, min(max_posts, ig_cap))
+            _tick(f"[instagram] {keyword!r}: collected {len(links)} post link(s) "
+                  f"(cap {min(max_posts, ig_cap)})")
+            if not links:
+                _tick(f"[instagram] {keyword!r}: NO links found — the hashtag page "
+                      f"may be empty, age-gated, or the grid didn't render.")
+            _skipped_known = 0
+            _failed = 0
             import random as _rnd
             for i, link in enumerate(links):
                 # Delta scraping: a post we already have gets a cheap engagement
@@ -581,6 +588,7 @@ async def search_keyword(
                             "comments_count": meta.get("comments"),
                             "views": meta.get("views"),
                         })
+                    _skipped_known += 1
                     _tick(f"[instagram] {keyword!r}: refreshed existing post {i+1}/{len(links)}")
                     continue
                 try:
@@ -589,7 +597,16 @@ async def search_keyword(
                         result.posts.append(post)
                         _tick(f"[instagram] {keyword!r}: NEW post {len(result.posts)} "
                               f"(likes={post.likes}, {len(post.comments)} comments)")
-                except Exception:
+                    else:
+                        # extract_post returns None when neither yt-dlp nor the DOM
+                        # yielded text or media — private/deleted/unsupported post,
+                        # or a login/consent wall. Say so instead of vanishing.
+                        _failed += 1
+                        _tick(f"[instagram] {keyword!r}: SKIPPED {link.rsplit('/', 2)[-2] if '/' in link else link}"
+                              f" — no content (private/deleted/age-gated, or not logged in)")
+                except Exception as e:  # noqa: BLE001
+                    _failed += 1
+                    _tick(f"[instagram] {keyword!r}: ERROR on post — {type(e).__name__}: {str(e)[:90]}")
                     continue
                 # If Instagram started throttling mid-loop, stop hitting it —
                 # keep what we have rather than navigating into more 429s.
@@ -599,9 +616,17 @@ async def search_keyword(
                 # Real cooldown between post navigations (the main 429 trigger).
                 await human_delay("action", "instagram")
                 await asyncio.sleep(config.IG_PER_POST_COOLDOWN_S * _rnd.uniform(1.0, 1.5))
+            _tick(f"[instagram] {keyword!r}: done — {len(result.posts)} new, "
+                  f"{_skipped_known} already known, {_failed} unusable "
+                  f"of {len(links)} link(s)")
+        else:
+            result.error = "not_logged_in"
+            _tick(f"[instagram] {keyword!r}: NOT LOGGED IN — log into Instagram "
+                  f"in its Chrome window; nothing can be collected until then.")
     except Exception as e:  # noqa: BLE001
         if not result.error:
             result.error = f"hashtag_feed_failed: {e}"
+        _tick(f"[instagram] {keyword!r}: feed failed — {type(e).__name__}: {str(e)[:120]}")
 
     result.finished_at = now_iso()
     return result
