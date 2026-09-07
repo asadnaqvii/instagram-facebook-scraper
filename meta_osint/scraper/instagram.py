@@ -555,23 +555,49 @@ async def search_keyword(
 
     # 2. Posts from the hashtag feed for this keyword (spaces -> single tag).
     known_urls = known_urls or set()
-    tag = keyword.replace(" ", "").lstrip("#")
+    # Instagram hashtag URLs are LOWERCASE. "DRDO" -> /explore/tags/DRDO/ lands
+    # on an empty/redirected page, so an uppercase keyword silently yielded
+    # nothing at all.
+    tag = keyword.replace(" ", "").lstrip("#").lower()
+
+    # Try the keyword's own tag first, then any real hashtags the search API
+    # surfaced (most posts first). A niche term often has no exact tag but
+    # several near-matches, which is where the actual volume lives.
+    tag_candidates = [tag]
+    for _h in sorted(result.hashtags, key=lambda x: (x.post_count or 0), reverse=True):
+        _t = (_h.tag or "").lstrip("#").lower()
+        if _t and _t not in tag_candidates:
+            tag_candidates.append(_t)
+    tag_candidates = tag_candidates[:4]
+
     try:
-        await page.goto(f"{IG}/explore/tags/{tag}/", wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action", "instagram")
-        if await detect_and_handle_rate_limit(page, "instagram", progress):
-            result.error = "rate_limited"
-            result.finished_at = now_iso()
-            return result
+        ig_cap = config.IG_MAX_POSTS_CAP or max_posts
+        want = min(max_posts, ig_cap)
+        links: list[str] = []
+        used_tag = tag
+        for _cand in tag_candidates:
+            await page.goto(f"{IG}/explore/tags/{_cand}/", wait_until="domcontentloaded", timeout=25000)
+            await human_delay("action", "instagram")
+            if await detect_and_handle_rate_limit(page, "instagram", progress):
+                result.error = "rate_limited"
+                result.finished_at = now_iso()
+                return result
+            if not await check_login(page):
+                break
+            _found = await collect_post_links(page, want)
+            _tick(f"[instagram] {keyword!r}: #{_cand} -> {len(_found)} link(s)")
+            if _found:
+                links = _found
+                used_tag = _cand
+                break
         if await check_login(page):
-            # Cap IG posts-per-keyword so each keyword is a smaller burst.
-            ig_cap = config.IG_MAX_POSTS_CAP or max_posts
-            links = await collect_post_links(page, min(max_posts, ig_cap))
-            _tick(f"[instagram] {keyword!r}: collected {len(links)} post link(s) "
-                  f"(cap {min(max_posts, ig_cap)})")
-            if not links:
-                _tick(f"[instagram] {keyword!r}: NO links found — the hashtag page "
-                      f"may be empty, age-gated, or the grid didn't render.")
+            if links:
+                _tick(f"[instagram] {keyword!r}: using #{used_tag}, "
+                      f"{len(links)} link(s) (cap {want})")
+            else:
+                _tick(f"[instagram] {keyword!r}: NO links from "
+                      f"{['#' + c for c in tag_candidates]} — tag may not exist, "
+                      f"be restricted/age-gated, or the grid didn't render.")
             _skipped_known = 0
             _failed = 0
             import random as _rnd
