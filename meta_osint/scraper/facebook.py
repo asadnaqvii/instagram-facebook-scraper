@@ -274,8 +274,28 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
 
     fresh = []
     for p in batch:
-        key = (p.get("text") or "")[:80]
-        if key and key not in seen_texts:
+        # Identity, best-available. The permalink is the only truly unique key;
+        # text is a fallback for posts whose link we couldn't read. Keying on
+        # text alone silently DROPPED every image/video post with no caption
+        # (very common on FB) because an empty key failed the `if key` test,
+        # and collapsed distinct posts that share a boilerplate opener.
+        url = (p.get("post_url") or "").strip()
+        if url:
+            key = "u:" + url
+        else:
+            text = (p.get("text") or "").strip()
+            if text:
+                key = "t:" + text[:200]
+            else:
+                # No link and no text — fall back to author + engagement so a
+                # media-only post still counts instead of vanishing.
+                key = "a:{}|{}|{}".format(
+                    (p.get("author") or "")[:60],
+                    p.get("likes"), p.get("comments_count"),
+                )
+                if key == "a:||None|None":
+                    continue  # genuinely empty node, skip
+        if key not in seen_texts:
             seen_texts.add(key)
             fresh.append(p)
     return fresh
@@ -401,7 +421,9 @@ async def search_keyword(
         await page.goto(f"{FB}/search/posts/?q={keyword}", wait_until="domcontentloaded", timeout=25000)
         await human_delay("action")
         seen: set[str] = set()
-        scrolls = max(max_posts // 2, 8)
+        # FB search lazy-loads only ~2-3 posts per scroll, so aim well past
+        # max_posts; the loop breaks early once enough are collected.
+        scrolls = min(max(max_posts, 12), config.MAX_SCROLLS)
         for i in range(scrolls):
             raw_posts.extend(await _extract_feed_posts(page, healer, seen))
             if len(raw_posts) >= max_posts:
