@@ -26,7 +26,7 @@
     <option value="scraped" {{ 'selected' if sort=='scraped' }}>Recently scraped</option>
     <option value="relevancy" {{ 'selected' if sort=='relevancy' }}>Most relevant to keyword</option>
   </select>
-  <select name="since" title="Only posts published within this window (posts with no known date are hidden)">
+  <select name="since" title="Posts published within this window. Undated posts (FB hides dates on many permalinks) are included if scraped in the window and shown with ~">
     <option value="" {{ 'selected' if not since }}>Any time</option>
     <option value="24h" {{ 'selected' if since=='24h' }}>Last 24 hours</option>
     <option value="7d" {{ 'selected' if since=='7d' }}>Last 7 days</option>

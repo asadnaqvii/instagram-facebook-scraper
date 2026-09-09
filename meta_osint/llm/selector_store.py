@@ -81,7 +81,16 @@ DEFAULT_SELECTORS: dict[str, dict] = {
         "candidates": ['meta[property="og:image"]'],
     },
     "facebook.search.post_container": {
-        "candidates": ['div[role="feed"] > div', 'div[role="article"]'],
+        # Live DOM (2026-09): each search result is a div[aria-posinset] inside
+        # the role=feed list — 5-11 per page. The older role=feed > div /
+        # role=article shapes matched only a few, which capped every surface at
+        # ~4 posts. Keep them as fallbacks for profile/hashtag feeds.
+        "candidates": [
+            'div[role="feed"] div[aria-posinset]',
+            'div[aria-posinset]',
+            'div[role="feed"] > div',
+            'div[role="article"]',
+        ],
     },
     "facebook.post.text": {
         "candidates": ['div[data-ad-comet-above-more-text]', 'div[dir="auto"]'],

@@ -63,18 +63,27 @@ async def _extract_post_timestamp(page: Page) -> str | None:
                 // FB renders the post age as <abbr> ("54m", aria-label
                 // "54 minutes ago"). The FIRST one on the page is the post's
                 // own; comment ages come later and sit under "Comment by".
-                for (const ab of document.querySelectorAll('abbr')) {
-                    if (ab.closest('[aria-label^="Comment by"], ul')) continue;
+                // Anything inside the notifications flyout (a role=dialog that
+                // starts with "Notifications") is NOT the post — its 1h/3w
+                // abbrs are what an unscoped scan picks up first.
+                const isNoise = (el) => {
+                    const d = el.closest('[role="dialog"]');
+                    if (d && /^\s*notifications/i.test(d.innerText || '')) return true;
+                    return !!el.closest('[aria-label^="Comment by"], ul');
+                };
+                const root = document.querySelector('[role="main"]') || document;
+                for (const ab of root.querySelectorAll('abbr')) {
+                    if (isNoise(ab)) continue;
                     const lab = (ab.getAttribute('aria-label') || ab.getAttribute('title') || '').trim();
-                    const txt = (ab.textContent || '').trim();
-                    if (lab && /\d/.test(lab)) return lab;
+                    const txt = (ab.innerText || ab.textContent || '').trim();
+                    if (lab && /\d|an hour|a minute|a day/i.test(lab)) return lab;
                     if (/^\d+\s?[smhdwy]$/.test(txt)) return txt;
                 }
                 // Timestamp links usually sit near the author, pointing at the
                 // permalink, with a title carrying the absolute date.
-                const links = [...document.querySelectorAll('a[role="link"]')];
+                const links = [...root.querySelectorAll('a[role="link"]')].filter(a => !isNoise(a));
                 for (const a of links) {
-                    const t = (a.textContent || '').trim();
+                    const t = (a.innerText || a.textContent || '').trim();
                     const title = a.getAttribute('aria-label') || a.getAttribute('title') || '';
                     // Absolute date in title.
                     if (/\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},\s*\d{4}/.test(title)) return title;
@@ -117,6 +126,14 @@ def _relative_to_iso(text: Optional[str]) -> Optional[str]:
         return now.isoformat()
     if low.startswith("yesterday"):
         return (now - timedelta(days=1)).isoformat()
+    m_a = re.match(r"^(?:about\s+)?an?\s+(second|minute|hour|day|week|month|year)\s+ago$", low)
+    if m_a:
+        unit = m_a.group(1)
+        delta = {"second": timedelta(seconds=1), "minute": timedelta(minutes=1),
+                 "hour": timedelta(hours=1), "day": timedelta(days=1),
+                 "week": timedelta(weeks=1), "month": timedelta(days=30),
+                 "year": timedelta(days=365)}[unit]
+        return (now - delta).isoformat()
     m = _REL_SHORT.match(t)
     if m:
         n, u = int(m.group(1)), m.group(2)
@@ -301,6 +318,7 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                             'a[href*="/photo/"]', 'a[href*="/photo.php"]', 'a[href*="fbid="]',
                             'a[href*="/groups/"][href*="/posts/"]',
                             'a[href*="/share/p/"]', 'a[href*="/share/v/"]', 'a[href*="/share/r/"]',
+                            'a[href*="/stories/"]',
                             'a[href*="pfbid"]', 'a[href*="/events/"]', 'a[href*="/notes/"]'
                         ].join(', ');
 
@@ -357,7 +375,11 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                         // "5M"/"12K" are view/like counts, not times.
                         let timeAgo = '';
                         let timeAbs = '';
-                        const inComment = (el) => !!el.closest('[aria-label^="Comment by"], ul');
+                        const inComment = (el) => {
+                            const d = el.closest('[role="dialog"]');
+                            if (d && /^\s*notifications/i.test(d.innerText || '')) return true;
+                            return !!el.closest('[aria-label^="Comment by"], ul');
+                        };
                         const dateLike = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
                         const relLike = /^\d+\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i;
                         // 1) The post-age <abbr>: FB puts "54 minutes ago" (or an
@@ -616,6 +638,12 @@ async def search_keyword(
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
             await human_delay("action")
+            # Close any open flyout (e.g. the notifications panel) so its
+            # timestamps and text don't get read as post content.
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
         except Exception as e:  # noqa: BLE001
             _tick(f"[facebook] {keyword!r}: {label}: navigation failed — {type(e).__name__}")
             return 0
@@ -818,15 +846,42 @@ async def search_keyword(
             try:
                 r = await scrape_page(tab, acct.username, healer,
                                       config.FB_POSTS_PER_PAGE, with_comments)
+                _pg_drop = 0
+                _pg_stale = 0
+                _pg_min = (config.FB_SEARCH_MIN_RELEVANCE_MULTI if len(keyword.split()) > 1
+                           else config.FB_SEARCH_MIN_RELEVANCE)
+                _pg_cutoff = ((datetime.now(timezone.utc) - timedelta(days=config.FRESHNESS_DAYS))
+                              if config.FRESHNESS_DAYS > 0 else None)
                 for p in r.posts:
                     if p.post_url and p.post_url in have_urls:
                         continue
+                    # Same gate as search results: a matching page can still
+                    # post off-topic content ("World Peace Now", 2016).
+                    if _pg_min > 0:
+                        _sc = keyword_relevancy(p.text, p.hashtags,
+                                                p.author_display_name or p.author_username or acct.username,
+                                                [keyword])
+                        if _sc is not None and _sc < _pg_min:
+                            _pg_drop += 1
+                            continue
+                    if _pg_cutoff and p.timestamp:
+                        try:
+                            _pts = datetime.fromisoformat(p.timestamp.replace("Z", "+00:00"))
+                            if _pts.tzinfo is None:
+                                _pts = _pts.replace(tzinfo=timezone.utc)
+                            if _pts < _pg_cutoff:
+                                _pg_stale += 1
+                                continue
+                        except ValueError:
+                            pass
                     if p.post_url:
                         have_urls.add(p.post_url)
                     p.raw_meta = {**(p.raw_meta or {}), "source": f"page:{acct.username}",
                                   "keyword": keyword}
                     got.append(p)
                 _tick(f"[facebook] {keyword!r}: page @{acct.username}: +{len(got)} post(s)"
+                      + (f", {_pg_drop} off-topic dropped" if _pg_drop else "")
+                      + (f", {_pg_stale} stale dropped" if _pg_stale else "")
                       + (f" ({r.error})" if r.error else ""))
             except Exception as e:  # noqa: BLE001
                 _tick(f"[facebook] {keyword!r}: page @{acct.username} failed — "
@@ -888,6 +943,10 @@ async def search_keyword(
                 await page.goto(post.post_url, wait_until="domcontentloaded",
                                 timeout=25000)
                 await human_delay("action", "facebook")
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
             if post.timestamp is None:
                 ts = await _extract_post_timestamp(page)
                 if ts:

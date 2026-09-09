@@ -847,8 +847,9 @@ class PostDatabase:
     ) -> list[dict]:
         """Fetch posts.
 
-        since_days: only posts whose own timestamp is within the last N days.
-                    Posts with no known date are excluded (nothing to judge).
+        since_days: posts published within the last N days; undated posts
+                    (FB hides dates on many permalinks) are included when they
+                    were scraped inside the window.
 
         sort:
           'latest'  — newest by best-available time: the post's own timestamp
@@ -877,8 +878,14 @@ class PostDatabase:
             params.append(keyword)
         if since_days:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=int(since_days))).isoformat()
-            where.append("p.timestamp IS NOT NULL AND p.timestamp >= ?")
-            params.append(cutoff)
+            # Facebook exposes no publish date on many permalinks (photo /
+            # group-post viewers), so a strict timestamp filter would hide most
+            # FB posts. Undated posts count as "recent" if they were SCRAPED
+            # inside the window; the UI marks those with "~". Re-runs refresh
+            # engagement without touching scraped_at, so old posts stay out.
+            where.append("((p.timestamp IS NOT NULL AND p.timestamp >= ?) "
+                         "OR (p.timestamp IS NULL AND p.scraped_at >= ?))")
+            params.extend([cutoff, cutoff])
         if where:
             sql.append("WHERE " + " AND ".join(where))
 
