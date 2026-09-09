@@ -124,6 +124,10 @@ async def extract_page_info(page: Page, name: str) -> Account:
 
 # ── search: posts + pages ────────────────────────────────────────────
 
+# Last feed-batch funnel numbers (offered by the DOM vs new after dedup).
+_last_batch_stats: dict[str, int] = {"offered": 0, "fresh": 0}
+
+
 async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: set[str]) -> list[dict]:
     """Pull post dicts out of whatever feed is currently on screen."""
     container = await healer.resolve(
@@ -273,6 +277,7 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
         return []
 
     fresh = []
+    _seen_before = len(seen_texts)
     for p in batch:
         # Identity, best-available. The permalink is the only truly unique key;
         # text is a fallback for posts whose link we couldn't read. Keying on
@@ -298,6 +303,11 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
         if key not in seen_texts:
             seen_texts.add(key)
             fresh.append(p)
+    # Expose the funnel: how many article nodes the DOM gave us vs how many
+    # were new. A large gap means the feed is repeating (scrolled past the end)
+    # rather than the extractor failing.
+    _last_batch_stats["offered"] = len(batch)
+    _last_batch_stats["fresh"] = len(fresh)
     return fresh
 
 
@@ -424,11 +434,25 @@ async def search_keyword(
         # FB search lazy-loads only ~2-3 posts per scroll, so aim well past
         # max_posts; the loop breaks early once enough are collected.
         scrolls = min(max(max_posts, 12), config.MAX_SCROLLS)
+        _stagnant = 0
         for i in range(scrolls):
+            _before = len(raw_posts)
             raw_posts.extend(await _extract_feed_posts(page, healer, seen))
+            _gained = len(raw_posts) - _before
             if len(raw_posts) >= max_posts:
                 break
+            # If the feed stops yielding NEW posts, more scrolling won't help —
+            # FB has either run out of results or is serving repeats.
+            _stagnant = _stagnant + 1 if _gained == 0 else 0
+            if _stagnant >= 4:
+                _tick(f"[facebook] {keyword!r}: feed stopped producing new posts "
+                      f"after {i+1} scroll(s) — {len(raw_posts)} collected "
+                      f"(asked {max_posts}). FB search results are exhausted or "
+                      f"repeating.")
+                break
             await scroll_page(page, 1)
+        _tick(f"[facebook] {keyword!r}: feed yielded {len(raw_posts)} raw post(s) "
+              f"in {i+1} scroll(s) (target {max_posts})")
         for raw in raw_posts[:max_posts]:
             url = raw.get("post_url") or ""
             # Delta scraping: refresh engagement for a post we already have,
@@ -462,20 +486,40 @@ async def search_keyword(
     # fully collected. FB search feeds carry no post date, but the permalink
     # page does (relative like "10w" or an absolute date in a link title), so
     # we grab it here in the same visit we use for comments.
-    if with_comments:
-        for post in result.posts:
-            if not post.post_url:
-                continue
-            try:
+    # NOTE: the timestamp lives on the permalink page, so this visit is needed
+    # even when comments are disabled — previously both were behind
+    # `if with_comments:`, which is why --no-comments also produced posts with
+    # no date at all (FB timestamps were 3% populated).
+    need_visit = [pp for pp in result.posts if pp.post_url and
+                  (with_comments or pp.timestamp is None)]
+    _enriched = 0
+    _no_url = sum(1 for pp in result.posts if not pp.post_url)
+    if _no_url:
+        _tick(f"[facebook] {keyword!r}: {_no_url} post(s) have no permalink — "
+              f"cannot fetch their comments/timestamp")
+    for post in need_visit:
+        try:
+            if with_comments:
                 post.comments = await extract_comments(page, post.post_url, healer)
                 if post.comments_count is None:
                     post.comments_count = len(post.comments)
-                if post.timestamp is None:
-                    ts = await _extract_post_timestamp(page)
-                    if ts:
-                        post.timestamp = ts
-            except Exception:
-                pass
+            else:
+                # Still need the page for the date; go there directly.
+                await page.goto(post.post_url, wait_until="domcontentloaded",
+                                timeout=25000)
+                await human_delay("action", "facebook")
+            if post.timestamp is None:
+                ts = await _extract_post_timestamp(page)
+                if ts:
+                    post.timestamp = ts
+            _enriched += 1
+        except Exception as e:  # noqa: BLE001
+            _tick(f"[facebook] {keyword!r}: enrich failed for a post — "
+                  f"{type(e).__name__}: {str(e)[:70]}")
+    if need_visit:
+        _dated = sum(1 for pp in result.posts if pp.timestamp)
+        _tick(f"[facebook] {keyword!r}: enriched {_enriched}/{len(need_visit)} "
+              f"post page(s); {_dated}/{len(result.posts)} now have a timestamp")
 
     # 4. Record the hashtag form of the keyword.
     tag = keyword.replace(" ", "").lstrip("#")
