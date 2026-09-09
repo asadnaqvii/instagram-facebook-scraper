@@ -60,6 +60,16 @@ async def _extract_post_timestamp(page: Page) -> str | None:
     try:
         cand = await page.evaluate(r"""
             () => {
+                // FB renders the post age as <abbr> ("54m", aria-label
+                // "54 minutes ago"). The FIRST one on the page is the post's
+                // own; comment ages come later and sit under "Comment by".
+                for (const ab of document.querySelectorAll('abbr')) {
+                    if (ab.closest('[aria-label^="Comment by"], ul')) continue;
+                    const lab = (ab.getAttribute('aria-label') || ab.getAttribute('title') || '').trim();
+                    const txt = (ab.textContent || '').trim();
+                    if (lab && /\d/.test(lab)) return lab;
+                    if (/^\d+\s?[smhdwy]$/.test(txt)) return txt;
+                }
                 // Timestamp links usually sit near the author, pointing at the
                 // permalink, with a title carrying the absolute date.
                 const links = [...document.querySelectorAll('a[role="link"]')];
@@ -75,7 +85,10 @@ async def _extract_post_timestamp(page: Page) -> str | None:
                 return '';
             }
         """)
-        return parse_relative_time(cand) if cand else None
+        if not cand:
+            return None
+        return (_absolute_to_iso(cand) or _relative_to_iso(cand)
+                or parse_relative_time(cand))
     except Exception:
         return None
 
@@ -344,17 +357,28 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                         // "5M"/"12K" are view/like counts, not times.
                         let timeAgo = '';
                         let timeAbs = '';
-                        const inComment = (el) => !!el.closest('[aria-label^="Comment by"], [aria-label*="omment"], ul');
+                        const inComment = (el) => !!el.closest('[aria-label^="Comment by"], ul');
                         const dateLike = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
-                        // 1) Absolute date FB attaches to the post-age element.
-                        for (const el of art.querySelectorAll('abbr[aria-label], abbr[title], a[aria-label], span[aria-label]')) {
+                        const relLike = /^\d+\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i;
+                        // 1) The post-age <abbr>: FB puts "54 minutes ago" (or an
+                        //    absolute date) in its aria-label and "54m" as text.
+                        //    First non-comment <abbr> in the card is the post's own.
+                        for (const ab of art.querySelectorAll('abbr')) {
+                            if (inComment(ab)) continue;
+                            const lab = (ab.getAttribute('aria-label') || ab.getAttribute('title') || '').trim();
+                            const txt = (ab.textContent || '').trim();
+                            if (lab && lab.length < 80 && (relLike.test(lab) || (dateLike.test(lab) && /\d/.test(lab)) || /^(today|yesterday)/i.test(lab))) { timeAbs = lab; break; }
+                            if (/^\d+\s?[smhdwy]$/.test(txt)) { timeAgo = txt; break; }
+                        }
+                        // 1b) Absolute/relative label on a link or span.
+                        if (!timeAbs && !timeAgo) for (const el of art.querySelectorAll('a[aria-label], span[aria-label]')) {
                             if (inComment(el)) continue;
-                            const lab = el.getAttribute('aria-label') || el.getAttribute('title') || '';
-                            if (lab && lab.length < 80 && ((dateLike.test(lab) && /\d/.test(lab)) || /^(today|yesterday)/i.test(lab))) { timeAbs = lab; break; }
+                            const lab = el.getAttribute('aria-label') || '';
+                            if (lab && lab.length < 80 && (relLike.test(lab) || (dateLike.test(lab) && /\d/.test(lab)) || /^(today|yesterday)/i.test(lab))) { timeAbs = lab; break; }
                         }
                         // 2) Relative text ("5h", "2 d") — lowercase single-letter
                         //    units only; "5M"/"12K" are counts. Skip comment blocks.
-                        if (!timeAbs) {
+                        if (!timeAbs && !timeAgo) {
                             for (const el of art.querySelectorAll('a[role="link"], a[href], abbr, span')) {
                                 if (inComment(el)) continue;
                                 const tt = (el.textContent || '').trim();
@@ -475,7 +499,8 @@ async def _dict_to_post(page: Page, raw: dict, keyword: str, with_video: bool = 
         scraped_at=now_iso(),
     )
     if raw.get("time_abs"):
-        post.timestamp = _absolute_to_iso(raw.get("time_abs"))
+        post.timestamp = (_absolute_to_iso(raw.get("time_abs"))
+                          or _relative_to_iso(raw.get("time_abs")))
     if not post.timestamp and raw.get("time_ago"):
         post.timestamp = _relative_to_iso(raw.get("time_ago"))
     # Images.

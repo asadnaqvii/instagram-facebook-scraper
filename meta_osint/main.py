@@ -81,7 +81,10 @@ def _cmd_scrape(args) -> None:
     print(f"  keywords ({len(keywords)}): {', '.join(keywords[:8])}{' ...' if len(keywords) > 8 else ''}")
     print(f"{'='*64}\n")
 
-    result = run_sync(cfg)
+    # Stream the scrapers' per-surface / per-post progress lines to the
+    # terminal. Without a callback the CLI printed only the final summary,
+    # hiding exactly the diagnostics that explain a low yield.
+    result = run_sync(cfg, progress=lambda m: print(m, flush=True))
 
     print(f"\n{'='*64}\n  DONE")
     for s in result["summaries"]:
