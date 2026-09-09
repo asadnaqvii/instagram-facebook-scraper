@@ -66,6 +66,12 @@ def _cmd_scrape(args) -> None:
         print("No keywords provided. Use -k/--keywords or -f/--file.", file=sys.stderr)
         sys.exit(2)
 
+    # --sort / --since drive the same config the scrapers read, so a cron
+    # entry needs no .env edits.
+    if getattr(args, 'sort', None):
+        config.SORT_MODE = args.sort
+    if getattr(args, 'since', None):
+        config.FRESHNESS_DAYS = args.since
     platforms = [args.platform] if args.platform else list(config.PLATFORMS)
     cfg = ScrapeConfig(
         keywords=keywords,
@@ -178,6 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("-n", "--max-posts", type=int, default=15, help="Max posts per keyword per platform (default 15)")
         sp.add_argument("--no-comments", action="store_true", help="Skip comment extraction (faster)")
         sp.add_argument("--analyze", action="store_true", help="Enable LLM content analysis (sentiment/entities/topics) — slower")
+        sp.add_argument("--sort", choices=["recent", "top"], help="recent = newest-first collection (for cron); top = platform ranking")
+        sp.add_argument("--since", metavar="DAYS", type=int, help="Only keep posts newer than DAYS (e.g. --since 1 for a daily cron)")
 
     # search = scrape with mode=search
     sp_search = sub.add_parser("search", help="Full keyword search: accounts + hashtags + posts")

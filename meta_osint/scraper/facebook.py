@@ -793,6 +793,10 @@ async def search_keyword(
         "hashtag": (f"{FB}/hashtag/{tag}", f"#{tag} page"),
     }
     surfaces = [x.strip() for x in config.FB_SEARCH_SURFACES.split(",") if x.strip()]
+    # Recency mode: FB's chronological filter goes first, so a periodic run
+    # collects the newest posts rather than FB's "top posts" ranking.
+    if config.SORT_MODE == "recent" and "recent" in surfaces:
+        surfaces = ["recent"] + [x for x in surfaces if x != "recent"]
     try:
         for sname in surfaces:
             if len(raw_posts) >= max_posts:
@@ -1022,6 +1026,33 @@ async def search_keyword(
         _dated = sum(1 for pp in result.posts if pp.timestamp)
         _tick(f"[facebook] {keyword!r}: enriched {_enriched}/{len(need_visit)} "
               f"post page(s); {_dated}/{len(result.posts)} now have a timestamp")
+
+    # 3b. Date backfill. FB search cards carry no date element at all (verified
+    # live: every card's age lookup returned None), so a post's timestamp can
+    # only come from its permalink. Visit the ones still missing a date.
+    if config.FB_DATE_BACKFILL:
+        undated = [pp for pp in result.posts
+                   if pp.post_url and not pp.timestamp
+                   and not str((pp.raw_meta or {}).get("source", "")).startswith("page:")]
+        undated = undated[:config.FB_DATE_BACKFILL_MAX]
+        if undated:
+            _got = 0
+            for pp in undated:
+                try:
+                    await page.goto(pp.post_url, wait_until="domcontentloaded", timeout=25000)
+                    await human_delay("action", "facebook")
+                    try:
+                        await page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    ts = await _extract_post_timestamp(page)
+                    if ts:
+                        pp.timestamp = ts
+                        _got += 1
+                except Exception:
+                    continue
+            _tick(f"[facebook] {keyword!r}: date backfill: {_got}/{len(undated)} "
+                  f"permalink(s) yielded a date")
 
     # 4. Record the hashtag form of the keyword.
     if tag:

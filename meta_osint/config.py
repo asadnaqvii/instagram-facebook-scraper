@@ -152,11 +152,23 @@ FB_FEED_STALL_SCROLLS = int(os.getenv("FB_FEED_STALL_SCROLLS", "6"))
 # Pause after each scroll so the next burst can render (randomised +/-).
 FB_FEED_SETTLE_MS = int(os.getenv("FB_FEED_SETTLE_MS", "1800"))
 
+# Collection ordering. "recent" puts each platform's chronological source
+# first — what a periodic/cron run wants. "top" keeps the platforms' own
+# relevance ranking (better for a one-off sweep of a topic).
+SORT_MODE = os.getenv("SORT_MODE", "recent").lower()
+# After the normal enrichment pass, visit permalinks of any posts STILL missing
+# a date purely to read it. FB search cards carry no date element, so without
+# this most FB posts have no timestamp and date filters can't see them.
+FB_DATE_BACKFILL = os.getenv("FB_DATE_BACKFILL", "true").lower() == "true"
+FB_DATE_BACKFILL_MAX = int(os.getenv("FB_DATE_BACKFILL_MAX", "12"))
+
 FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,reels,hashtag,videos")
-# Drop search-surface posts with no keyword signal at all. The NLP relevancy
-# baseline for "keyword appears nowhere" is 15, so 20 removes pure noise while
-# keeping anything with a real match. 0 disables the gate.
-FB_SEARCH_MIN_RELEVANCE = int(os.getenv("FB_SEARCH_MIN_RELEVANCE", "20"))
+# Drop search-surface posts with no keyword signal at all. Scores are stepped:
+# 15 = keyword absent, 35 = one word of it present, 45 = hashtag-only,
+# 55 = author/most-words, 65 = all words, 85 = exact phrase. 35 therefore keeps
+# anything with a real textual match and drops only "linked by search but the
+# keyword appears nowhere". 0 disables the gate.
+FB_SEARCH_MIN_RELEVANCE = int(os.getenv("FB_SEARCH_MIN_RELEVANCE", "35"))
 # Scrape the feeds of the top N discovered pages (0 disables), posts per page.
 FB_PAGE_FEEDS = int(os.getenv("FB_PAGE_FEEDS", "4"))
 FB_POSTS_PER_PAGE = int(os.getenv("FB_POSTS_PER_PAGE", "6"))
@@ -170,10 +182,12 @@ IG_POSTS_PER_ACCOUNT = int(os.getenv("IG_POSTS_PER_ACCOUNT", "6"))
 SOURCE_CONCURRENCY = int(os.getenv("SOURCE_CONCURRENCY", "1"))
 
 # ── Relevance ─────────────────────────────────────────────────────────
-# Multi-word keywords are how you add CONTEXT: "DRDO missile" only keeps
-# posts containing every word (65+) or the phrase (85) or an author match
-# (55). A single stray word (35) or a hashtag-only hit (45) is dropped.
-FB_SEARCH_MIN_RELEVANCE_MULTI = int(os.getenv("FB_SEARCH_MIN_RELEVANCE_MULTI", "50"))
+# Multi-word keywords add CONTEXT, but requiring every word is too strict for
+# broad topics: "Strategic Warfare" kept 1 of 219 real posts at 50, and 8 at 35
+# ("iran us conflict": 30 -> 47). 35 keeps posts matching ANY word of the
+# keyword, which for a topical phrase is usually still on-topic. Raise to 50
+# (all-words/phrase/author only) when a keyword is generating noise.
+FB_SEARCH_MIN_RELEVANCE_MULTI = int(os.getenv("FB_SEARCH_MIN_RELEVANCE_MULTI", "35"))
 # Only scrape the feeds of discovered pages/accounts whose NAME matches the
 # keyword (author-match scores 55). FB page-search returns unrelated pages
 # too; without this their feeds pour off-topic posts into the DB.

@@ -708,6 +708,33 @@ async def search_keyword(
     except Exception as e:  # noqa: BLE001
         _tick(f"[instagram] {keyword!r}: account feeds failed — {type(e).__name__}")
 
+    # Recency: /explore/tags/ serves Instagram's TOP-posts grid, not a
+    # chronological one. Every IG post carries a real upload date from yt-dlp,
+    # so order the collected posts newest-first and drop anything outside the
+    # freshness window — that is what makes a periodic run useful.
+    if config.SORT_MODE == "recent" and result.posts:
+        result.posts.sort(key=lambda p: p.timestamp or "", reverse=True)
+    if config.FRESHNESS_DAYS > 0 and result.posts:
+        import datetime as _dt
+        _cut = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=config.FRESHNESS_DAYS)
+        _kept, _stale = [], 0
+        for p in result.posts:
+            if p.timestamp:
+                try:
+                    _t = _dt.datetime.fromisoformat(str(p.timestamp).replace("Z", "+00:00"))
+                    if _t.tzinfo is None:
+                        _t = _t.replace(tzinfo=_dt.timezone.utc)
+                    if _t < _cut:
+                        _stale += 1
+                        continue
+                except ValueError:
+                    pass
+            _kept.append(p)
+        if _stale:
+            _tick(f"[instagram] {keyword!r}: dropped {_stale} post(s) older than "
+                  f"{config.FRESHNESS_DAYS} day(s)")
+        result.posts = _kept
+
     result.finished_at = now_iso()
     return result
 
