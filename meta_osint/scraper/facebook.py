@@ -14,12 +14,15 @@ downloadable file.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from typing import Optional
+from urllib.parse import quote_plus
 
 from playwright.async_api import Page
 
 from .. import config
-from ..browser.manager import human_delay, scroll_page
+from ..browser.manager import human_delay, scroll_page, detect_and_handle_rate_limit
 from ..llm.healer import SelectorHealer
 from ..models import (
     Account,
@@ -34,6 +37,7 @@ from ..models import (
 )
 from . import media as media_mod
 from .helpers import (
+    keyword_relevancy,
     absolute_url,
     clean_text,
     extract_hashtags,
@@ -123,6 +127,15 @@ async def extract_page_info(page: Page, name: str) -> Account:
 
 
 # ── search: posts + pages ────────────────────────────────────────────
+
+# FB's "Recent posts" sort is selected via an opaque ?filters= parameter — a
+# base64-encoded JSON blob. Build it rather than hardcode it.
+_RECENT_FILTER = quote_plus(base64.b64encode(json.dumps(
+    {"rp_chrono_sort:0": json.dumps({"name": "chronosort", "args": ""},
+                                     separators=(",", ":"))},
+    separators=(",", ":"),
+).encode("utf-8")).decode("ascii"))
+
 
 # Last feed-batch funnel numbers (offered by the DOM vs new after dedup).
 _last_batch_stats: dict[str, int] = {"offered": 0, "fresh": 0}
@@ -427,32 +440,76 @@ async def search_keyword(
     # permalinks for comments — navigating away mid-collection would blow up
     # the search results page and force a costly re-scroll each time.
     raw_posts: list[dict] = []
-    try:
-        await page.goto(f"{FB}/search/posts/?q={keyword}", wait_until="domcontentloaded", timeout=25000)
-        await human_delay("action")
-        seen: set[str] = set()
-        # FB search lazy-loads only ~2-3 posts per scroll, so aim well past
-        # max_posts; the loop breaks early once enough are collected.
-        scrolls = min(max(max_posts, 12), config.MAX_SCROLLS)
-        _stagnant = 0
+    seen: set[str] = set()
+    filtered_out = 0
+
+    async def _harvest_feed(url: str, label: str, want: int) -> int:
+        """Navigate to a feed URL and pull article posts into raw_posts.
+
+        Returns the number of NEW raw posts gained. Crucially, it detects FB
+        bouncing us to the home feed / a login wall — the extractor would
+        happily read that as "results" and store random feed posts under the
+        keyword (the DRDO 0-of-4 symptom)."""
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            await human_delay("action")
+        except Exception as e:  # noqa: BLE001
+            _tick(f"[facebook] {keyword!r}: {label}: navigation failed — {type(e).__name__}")
+            return 0
+        final = page.url or ""
+        expect = "/search/" if "/search/" in url else ("/hashtag/" if "/hashtag/" in url else None)
+        if expect and expect not in final:
+            _tick(f"[facebook] {keyword!r}: {label}: FB redirected to {final[:70]} — "
+                  f"not serving results for this query/account; surface skipped")
+            return 0
+        low = final.lower()
+        if "/login" in low or "checkpoint" in low:
+            _tick(f"[facebook] {keyword!r}: {label}: login/checkpoint wall — skipped")
+            return 0
+        if await detect_and_handle_rate_limit(page, "facebook", progress):
+            return 0
+        before = len(raw_posts)
+        scrolls = min(max(want, 8), config.MAX_SCROLLS)
+        stagnant = 0
+        i = 0
         for i in range(scrolls):
-            _before = len(raw_posts)
+            b = len(raw_posts)
             raw_posts.extend(await _extract_feed_posts(page, healer, seen))
-            _gained = len(raw_posts) - _before
-            if len(raw_posts) >= max_posts:
+            if len(raw_posts) - before >= want:
                 break
-            # If the feed stops yielding NEW posts, more scrolling won't help —
-            # FB has either run out of results or is serving repeats.
-            _stagnant = _stagnant + 1 if _gained == 0 else 0
-            if _stagnant >= 4:
-                _tick(f"[facebook] {keyword!r}: feed stopped producing new posts "
-                      f"after {i+1} scroll(s) — {len(raw_posts)} collected "
-                      f"(asked {max_posts}). FB search results are exhausted or "
-                      f"repeating.")
+            stagnant = stagnant + 1 if len(raw_posts) == b else 0
+            if stagnant >= 3:
                 break
             await scroll_page(page, 1)
-        _tick(f"[facebook] {keyword!r}: feed yielded {len(raw_posts)} raw post(s) "
-              f"in {i+1} scroll(s) (target {max_posts})")
+        gained = len(raw_posts) - before
+        _tick(f"[facebook] {keyword!r}: {label}: +{gained} post(s) in {i + 1} scroll(s)")
+        return gained
+
+    # 1. Posts from several search surfaces. Collect everything from the feeds
+    # FIRST (author, text, media, engagement are inline), then only visit
+    # permalinks later for comments/dates.
+    q = quote_plus(keyword)
+    tag = keyword.replace(" ", "").lstrip("#")
+    surface_urls = {
+        "posts":   (f"{FB}/search/posts/?q={q}", "post search"),
+        "recent":  (f"{FB}/search/posts/?q={q}&filters={_RECENT_FILTER}", "recent posts"),
+        "videos":  (f"{FB}/search/videos/?q={q}", "video search"),
+        "hashtag": (f"{FB}/hashtag/{tag}", f"#{tag} page"),
+    }
+    surfaces = [x.strip() for x in config.FB_SEARCH_SURFACES.split(",") if x.strip()]
+    try:
+        for sname in surfaces:
+            if len(raw_posts) >= max_posts:
+                break
+            if sname not in surface_urls:
+                _tick(f"[facebook] {keyword!r}: unknown surface {sname!r} ignored")
+                continue
+            url, label = surface_urls[sname]
+            await _harvest_feed(url, label, max_posts - len(raw_posts))
+        _tick(f"[facebook] {keyword!r}: search surfaces yielded {len(raw_posts)} raw post(s) "
+              f"(target {max_posts})")
+
+        min_rel = config.FB_SEARCH_MIN_RELEVANCE
         for raw in raw_posts[:max_posts]:
             url = raw.get("post_url") or ""
             # Delta scraping: refresh engagement for a post we already have,
@@ -467,10 +524,25 @@ async def search_keyword(
                 continue
             try:
                 post = await _dict_to_post(page, raw, keyword)
-                result.posts.append(post)
-                _tick(f"[facebook] {keyword!r}: post {len(result.posts)} (likes={post.likes}, comments={post.comments_count})")
             except Exception:
                 continue
+            # Relevance gate: FB search results are personalised and frequently
+            # off-topic. Don't store posts that show no keyword signal at all.
+            if min_rel > 0:
+                score = keyword_relevancy(
+                    post.text, post.hashtags,
+                    post.author_display_name or post.author_username, [keyword],
+                )
+                if score is not None and score < min_rel:
+                    filtered_out += 1
+                    continue
+            post.raw_meta = {**(post.raw_meta or {}), "source": "search"}
+            result.posts.append(post)
+            _tick(f"[facebook] {keyword!r}: post {len(result.posts)} "
+                  f"(likes={post.likes}, comments={post.comments_count})")
+        if filtered_out:
+            _tick(f"[facebook] {keyword!r}: dropped {filtered_out} off-topic search "
+                  f"result(s) (no keyword signal; FB_SEARCH_MIN_RELEVANCE={min_rel})")
     except Exception as e:  # noqa: BLE001
         result.error = f"post_search_failed: {e}"
 
@@ -482,6 +554,67 @@ async def search_keyword(
         if not result.error:
             result.error = f"page_search_failed: {e}"
 
+    # 2b. Feeds of the discovered pages — the richest on-topic source by far.
+    # A page that matched the keyword posts about that topic constantly,
+    # whereas search hands back a thin, personalised slice. Independent
+    # sources, so they can run in parallel tabs (SOURCE_CONCURRENCY).
+    n_pages = config.FB_PAGE_FEEDS
+    if n_pages > 0 and result.accounts:
+        targets = [a for a in result.accounts if a.username][:n_pages]
+        conc = max(1, min(config.SOURCE_CONCURRENCY, len(targets)))
+        _tick(f"[facebook] {keyword!r}: scraping feeds of {len(targets)} discovered "
+              f"page(s), {config.FB_POSTS_PER_PAGE} posts each, concurrency {conc}")
+        have_urls = {p.post_url for p in result.posts if p.post_url} | set(known_urls)
+        queue: list = list(targets)
+
+        async def _page_feed(acct, tab) -> list:
+            got: list = []
+            try:
+                r = await scrape_page(tab, acct.username, healer,
+                                      config.FB_POSTS_PER_PAGE, with_comments)
+                for p in r.posts:
+                    if p.post_url and p.post_url in have_urls:
+                        continue
+                    if p.post_url:
+                        have_urls.add(p.post_url)
+                    p.raw_meta = {**(p.raw_meta or {}), "source": f"page:{acct.username}",
+                                  "keyword": keyword}
+                    got.append(p)
+                _tick(f"[facebook] {keyword!r}: page @{acct.username}: +{len(got)} post(s)"
+                      + (f" ({r.error})" if r.error else ""))
+            except Exception as e:  # noqa: BLE001
+                _tick(f"[facebook] {keyword!r}: page @{acct.username} failed — "
+                      f"{type(e).__name__}: {str(e)[:60]}")
+            return got
+
+        async def _worker(tab) -> list:
+            out: list = []
+            while queue:
+                acct = queue.pop(0)
+                out.extend(await _page_feed(acct, tab))
+                if queue:
+                    await human_delay("action")
+            return out
+
+        if conc == 1:
+            result.posts.extend(await _worker(page))
+        else:
+            tabs = []
+            try:
+                for _ in range(conc):
+                    tabs.append(await page.context.new_page())
+                gathered = await asyncio.gather(*(_worker(tb) for tb in tabs),
+                                                return_exceptions=True)
+                for g in gathered:
+                    if isinstance(g, list):
+                        result.posts.extend(g)
+            finally:
+                for tb in tabs:
+                    try:
+                        await tb.close()
+                    except Exception:
+                        pass
+
     # 3. Comments + timestamp — visit each post permalink now that the feed is
     # fully collected. FB search feeds carry no post date, but the permalink
     # page does (relative like "10w" or an absolute date in a link title), so
@@ -491,7 +624,8 @@ async def search_keyword(
     # `if with_comments:`, which is why --no-comments also produced posts with
     # no date at all (FB timestamps were 3% populated).
     need_visit = [pp for pp in result.posts if pp.post_url and
-                  (with_comments or pp.timestamp is None)]
+                  (with_comments or pp.timestamp is None) and
+                  not str((pp.raw_meta or {}).get("source", "")).startswith("page:")]
     _enriched = 0
     _no_url = sum(1 for pp in result.posts if not pp.post_url)
     if _no_url:
@@ -522,7 +656,6 @@ async def search_keyword(
               f"post page(s); {_dated}/{len(result.posts)} now have a timestamp")
 
     # 4. Record the hashtag form of the keyword.
-    tag = keyword.replace(" ", "").lstrip("#")
     if tag:
         result.hashtags.append(Hashtag(tag=tag.lower(), url=f"{FB}/hashtag/{tag}"))
 

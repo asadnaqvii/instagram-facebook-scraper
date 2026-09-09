@@ -48,6 +48,12 @@ BACKEND="${META_OSINT_DB_BACKEND:-sqlite}"
 OLLAMA="${OLLAMA_URL:-http://localhost:11434}"
 PROFILE_BASE="${META_OSINT_CHROME_BASE:-$HOME/.meta-osint}"
 PY="${PYTHON:-python3}"
+# Optional Chrome-level proxy, e.g. http://1.2.3.4:8080 or socks5://host:1080.
+# Use ONE STICKY RESIDENTIAL IP for the whole session. Rotating proxies with a
+# logged-in account look like impossible travel and get the ACCOUNT flagged.
+# Chrome does not take user:pass here — use an IP-whitelisted proxy or a local
+# forwarder. Leave empty for a direct connection.
+CHROME_PROXY="${CHROME_PROXY:-}"
 
 # Chrome is an FD hog (500-1500 file descriptors per browser). The common
 # 1024 default is easily exhausted by two browsers plus whatever else runs
@@ -79,6 +85,7 @@ if [ "$BACKEND" = "mysql" ]; then
 fi
 echo "       chrome (fb/ig) : $CDP_HOST:$FB_PORT / $CDP_HOST:$IG_PORT"
 echo "       ollama         : $OLLAMA"
+echo "       chrome proxy   : ${CHROME_PROXY:-none (direct)}"
 hr
 
 # ── 2. python + deps ───────────────────────────────────────────────
@@ -144,6 +151,7 @@ else
     fi
     mkdir -p "$2"
     nohup "$CHROME" --remote-debugging-port="$1" --user-data-dir="$2" \
+      ${CHROME_PROXY:+--proxy-server="$CHROME_PROXY"} \
       --no-first-run --no-default-browser-check \
       --disable-gpu --disable-dev-shm-usage --log-level=3 \
       --disable-extensions --disable-background-networking \

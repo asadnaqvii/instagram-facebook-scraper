@@ -654,6 +654,52 @@ async def search_keyword(
             result.error = f"hashtag_feed_failed: {e}"
         _tick(f"[instagram] {keyword!r}: feed failed — {type(e).__name__}: {str(e)[:120]}")
 
+
+    # 3. Recent posts from the top discovered PUBLIC accounts. The hashtag grid
+    # is a thin slice; accounts that matched the keyword post about it
+    # constantly, so their feeds are where the on-topic volume actually is.
+    n_acc = config.IG_ACCOUNT_FEEDS
+    try:
+        if n_acc > 0 and result.accounts and await check_login(page):
+            import random as _rnd2
+            targets = [a for a in result.accounts if a.username and not a.is_private][:n_acc]
+            have = {p.post_url for p in result.posts if p.post_url} | set(known_urls)
+            _tick(f"[instagram] {keyword!r}: pulling recent posts from "
+                  f"{len(targets)} discovered account(s)")
+            for acct in targets:
+                try:
+                    await page.goto(f"{IG}/{acct.username}/", wait_until="domcontentloaded",
+                                    timeout=25000)
+                    await human_delay("action", "instagram")
+                    if await detect_and_handle_rate_limit(page, "instagram", progress):
+                        result.error = result.error or "rate_limited_partial"
+                        break
+                    links = [l for l in await collect_post_links(page, config.IG_POSTS_PER_ACCOUNT * 2)
+                             if l not in have][:config.IG_POSTS_PER_ACCOUNT]
+                    got = 0
+                    for link in links:
+                        try:
+                            post = await extract_post(page, link, healer,
+                                                      author_fallback=acct.username,
+                                                      with_comments=with_comments)
+                        except Exception:  # noqa: BLE001
+                            post = None
+                        if post:
+                            post.raw_meta = {**(post.raw_meta or {}),
+                                             "source": f"account:{acct.username}",
+                                             "keyword": keyword}
+                            result.posts.append(post)
+                            have.add(link)
+                            got += 1
+                        await human_delay("action", "instagram")
+                        await asyncio.sleep(config.IG_PER_POST_COOLDOWN_S * _rnd2.uniform(1.0, 1.5))
+                    _tick(f"[instagram] {keyword!r}: @{acct.username}: +{got} post(s)")
+                except Exception as e:  # noqa: BLE001
+                    _tick(f"[instagram] {keyword!r}: @{acct.username} failed — "
+                          f"{type(e).__name__}: {str(e)[:60]}")
+    except Exception as e:  # noqa: BLE001
+        _tick(f"[instagram] {keyword!r}: account feeds failed — {type(e).__name__}")
+
     result.finished_at = now_iso()
     return result
 

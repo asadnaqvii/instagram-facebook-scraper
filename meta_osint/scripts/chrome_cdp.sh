@@ -60,6 +60,7 @@ launch_one() {
   echo "Launching Chrome for $platform on CDP $port (profile: $profile)..."
   "$CHROME_BIN" \
     --remote-debugging-port="$port" \
+    ${CHROME_PROXY:+--proxy-server="$CHROME_PROXY"} \
     --user-data-dir="$dir" \
     --no-first-run \
     --no-default-browser-check \

@@ -131,6 +131,30 @@ HUMAN_KEYWORD_PAUSE_S = (
 )
 
 
+# ── Coverage: more sources per keyword ───────────────────────────────
+# Facebook's post search returns a thin, personalised slice — often not even
+# on-topic (a local "DRDO" run stored 4 posts, none mentioning DRDO). Real
+# volume comes from MORE SURFACES per keyword and from the FEEDS of the pages
+# the search discovered. Surfaces, comma-separated, tried in order:
+#   posts    /search/posts/?q=          recent   same, newest-first
+#   videos   /search/videos/?q=         hashtag  /hashtag/<keyword>
+FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,hashtag,videos")
+# Drop search-surface posts with no keyword signal at all. The NLP relevancy
+# baseline for "keyword appears nowhere" is 15, so 20 removes pure noise while
+# keeping anything with a real match. 0 disables the gate.
+FB_SEARCH_MIN_RELEVANCE = int(os.getenv("FB_SEARCH_MIN_RELEVANCE", "20"))
+# Scrape the feeds of the top N discovered pages (0 disables), posts per page.
+FB_PAGE_FEEDS = int(os.getenv("FB_PAGE_FEEDS", "4"))
+FB_POSTS_PER_PAGE = int(os.getenv("FB_POSTS_PER_PAGE", "6"))
+# Instagram: also pull recent posts from the top discovered public accounts.
+IG_ACCOUNT_FEEDS = int(os.getenv("IG_ACCOUNT_FEEDS", "3"))
+IG_POSTS_PER_ACCOUNT = int(os.getenv("IG_POSTS_PER_ACCOUNT", "6"))
+# Parallel tabs for INDEPENDENT sources (page feeds) inside one platform's
+# logged-in Chrome. 1 = sequential (safest). 2-3 is faster, but it is one
+# account visibly browsing several pages at once — raise with care, and never
+# on a datacenter IP without a sticky residential proxy.
+SOURCE_CONCURRENCY = int(os.getenv("SOURCE_CONCURRENCY", "1"))
+
 # When a 429 (rate limit) is detected, pause this long before continuing.
 # Doubles on repeated hits (capped). This is what stops the scraper from
 # hammering Instagram harder when it's already asking us to slow down.
