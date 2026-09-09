@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -78,6 +80,54 @@ async def _extract_post_timestamp(page: Page) -> str | None:
         return None
 
 FB = "https://www.facebook.com"
+
+
+_REL_SHORT = re.compile(r"^(\d+)\s?([smhdwy])$")            # 5h, 2 d  (lowercase only:
+                                                                 # "5M" is a view count)
+_REL_LONG = re.compile(
+    r"^(\d+)\s*(mins?|minutes?|hrs?|hours?|days?|wks?|weeks?|mos?|months?|yrs?|years?)"
+    r"(\s+ago)?$", re.I,
+)
+
+
+def _relative_to_iso(text: Optional[str]) -> Optional[str]:
+    """'5h' / '2 d' / '13 mins' / 'yesterday' -> approximate ISO timestamp (UTC).
+
+    FB search cards show the post age as relative text and often carry no
+    permalink, so this is the only way those posts get a date at all."""
+    if not text:
+        return None
+    t = text.strip()
+    low = t.lower()
+    now = datetime.now(timezone.utc)
+    if low.startswith("just now") or low == "now":
+        return now.isoformat()
+    if low.startswith("yesterday"):
+        return (now - timedelta(days=1)).isoformat()
+    m = _REL_SHORT.match(t)
+    if m:
+        n, u = int(m.group(1)), m.group(2)
+        delta = {"s": timedelta(seconds=n), "m": timedelta(minutes=n),
+                 "h": timedelta(hours=n), "d": timedelta(days=n),
+                 "w": timedelta(weeks=n), "y": timedelta(days=365 * n)}[u]
+        return (now - delta).isoformat()
+    m = _REL_LONG.match(low)
+    if m:
+        n, u = int(m.group(1)), m.group(2)
+        if u.startswith("mi"):
+            delta = timedelta(minutes=n)
+        elif u.startswith("h"):
+            delta = timedelta(hours=n)
+        elif u.startswith("d"):
+            delta = timedelta(days=n)
+        elif u.startswith("w"):
+            delta = timedelta(weeks=n)
+        elif u.startswith("mo"):
+            delta = timedelta(days=30 * n)
+        else:
+            delta = timedelta(days=365 * n)
+        return (now - delta).isoformat()
+    return None
 
 
 def _as_int(value) -> Optional[int]:
@@ -234,6 +284,19 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                             if (al) postUrl = normalize(al.href || al.getAttribute('href'));
                         }
 
+                        // Post age as FB renders it ("5h", "2 d", "13 mins",
+                        // "yesterday"). Lowercase single-letter units only —
+                        // "5M"/"12K" are view/like counts, not times.
+                        let timeAgo = '';
+                        for (const el of art.querySelectorAll('a[role="link"], a[href], abbr, span')) {
+                            const tt = (el.textContent || '').trim();
+                            if (!tt || tt.length > 14) continue;
+                            if (/^\d+\s?[smhdwy]$/.test(tt) ||
+                                /^(just now|yesterday|\d+\s*(mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?)(\s+ago)?)$/i.test(tt)) {
+                                timeAgo = tt; break;
+                            }
+                        }
+
                         const images = [];
                         art.querySelectorAll('img[src*="scontent"]').forEach(img => {
                             if ((img.naturalWidth || img.width || 0) > 60) images.push(img.src);
@@ -275,6 +338,7 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                             text: text.slice(0, 2000),
                             author: author.slice(0, 120),
                             post_url: postUrl,
+                            time_ago: timeAgo,
                             images: images.slice(0, 8),
                             likes: reactions,
                             comments: comments,
@@ -340,6 +404,8 @@ async def _dict_to_post(page: Page, raw: dict, keyword: str, with_video: bool = 
         shares=_as_int(raw.get("shares")),
         scraped_at=now_iso(),
     )
+    if raw.get("time_ago"):
+        post.timestamp = _relative_to_iso(raw.get("time_ago"))
     # Images.
     for img in (raw.get("images") or [])[: config.MAX_MEDIA_PER_POST]:
         local = await media_mod.download_image(page, img)
@@ -485,6 +551,47 @@ async def search_keyword(
         _tick(f"[facebook] {keyword!r}: {label}: +{gained} post(s) in {i + 1} scroll(s)")
         return gained
 
+    async def _harvest_reels(url: str, want: int) -> int:
+        """Reels search is a link grid, not article cards: gather /reel/ links
+        and let _dict_to_post pull caption/likes/views/date via yt-dlp."""
+        label = "reels search"
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            await human_delay("action")
+        except Exception as e:  # noqa: BLE001
+            _tick(f"[facebook] {keyword!r}: {label}: navigation failed — {type(e).__name__}")
+            return 0
+        final = page.url or ""
+        if "/search/" not in final:
+            _tick(f"[facebook] {keyword!r}: {label}: FB redirected to {final[:70]} — skipped")
+            return 0
+        low = final.lower()
+        if "/login" in low or "checkpoint" in low:
+            _tick(f"[facebook] {keyword!r}: {label}: login/checkpoint wall — skipped")
+            return 0
+        if await detect_and_handle_rate_limit(page, "facebook", progress):
+            return 0
+        links = await _collect_links(
+            page, 'a[href*="/reel/"]',
+            max_scrolls=min(max(want // 4, 3), config.MAX_SCROLLS),
+        )
+        have = {r.get("post_url") for r in raw_posts if r.get("post_url")}
+        gained = 0
+        for link in links:
+            if gained >= want:
+                break
+            if not link or link in have or "/reel/" not in link:
+                continue
+            have.add(link)
+            seen.add("u:" + link)
+            # Minimal raw dict; _dict_to_post enriches it through yt-dlp.
+            raw_posts.append({"post_url": link, "text": "", "author": "",
+                              "images": [], "is_reel": True})
+            gained += 1
+        _tick(f"[facebook] {keyword!r}: {label}: +{gained} reel link(s) "
+              f"({len(links)} on page)")
+        return gained
+
     # 1. Posts from several search surfaces. Collect everything from the feeds
     # FIRST (author, text, media, engagement are inline), then only visit
     # permalinks later for comments/dates.
@@ -494,6 +601,7 @@ async def search_keyword(
         "posts":   (f"{FB}/search/posts/?q={q}", "post search"),
         "recent":  (f"{FB}/search/posts/?q={q}&filters={_RECENT_FILTER}", "recent posts"),
         "videos":  (f"{FB}/search/videos/?q={q}", "video search"),
+        "reels":   (f"{FB}/search/reels/?q={q}", "reels search"),
         "hashtag": (f"{FB}/hashtag/{tag}", f"#{tag} page"),
     }
     surfaces = [x.strip() for x in config.FB_SEARCH_SURFACES.split(",") if x.strip()]
@@ -505,11 +613,20 @@ async def search_keyword(
                 _tick(f"[facebook] {keyword!r}: unknown surface {sname!r} ignored")
                 continue
             url, label = surface_urls[sname]
-            await _harvest_feed(url, label, max_posts - len(raw_posts))
+            if sname == "reels":
+                await _harvest_reels(url, max_posts - len(raw_posts))
+            else:
+                await _harvest_feed(url, label, max_posts - len(raw_posts))
         _tick(f"[facebook] {keyword!r}: search surfaces yielded {len(raw_posts)} raw post(s) "
               f"(target {max_posts})")
 
-        min_rel = config.FB_SEARCH_MIN_RELEVANCE
+        # Multi-word keywords carry context ("DRDO missile"): require every
+        # word / the phrase / an author match, not just one stray word.
+        min_rel = (config.FB_SEARCH_MIN_RELEVANCE_MULTI if len(keyword.split()) > 1
+                   else config.FB_SEARCH_MIN_RELEVANCE)
+        fresh_days = config.FRESHNESS_DAYS
+        fresh_cutoff = (datetime.now(timezone.utc) - timedelta(days=fresh_days)) if fresh_days > 0 else None
+        stale = 0
         for raw in raw_posts[:max_posts]:
             url = raw.get("post_url") or ""
             # Delta scraping: refresh engagement for a post we already have,
@@ -536,13 +653,27 @@ async def search_keyword(
                 if score is not None and score < min_rel:
                     filtered_out += 1
                     continue
+            # Freshness: drop posts we KNOW are older than the window.
+            if fresh_cutoff and post.timestamp:
+                try:
+                    _ts = datetime.fromisoformat(post.timestamp.replace("Z", "+00:00"))
+                    if _ts.tzinfo is None:
+                        _ts = _ts.replace(tzinfo=timezone.utc)
+                    if _ts < fresh_cutoff:
+                        stale += 1
+                        continue
+                except ValueError:
+                    pass
             post.raw_meta = {**(post.raw_meta or {}), "source": "search"}
             result.posts.append(post)
             _tick(f"[facebook] {keyword!r}: post {len(result.posts)} "
                   f"(likes={post.likes}, comments={post.comments_count})")
         if filtered_out:
             _tick(f"[facebook] {keyword!r}: dropped {filtered_out} off-topic search "
-                  f"result(s) (no keyword signal; FB_SEARCH_MIN_RELEVANCE={min_rel})")
+                  f"result(s) (relevance < {min_rel})")
+        if stale:
+            _tick(f"[facebook] {keyword!r}: dropped {stale} post(s) older than "
+                  f"{fresh_days} day(s) (FRESHNESS_DAYS)")
     except Exception as e:  # noqa: BLE001
         result.error = f"post_search_failed: {e}"
 
@@ -560,8 +691,25 @@ async def search_keyword(
     # sources, so they can run in parallel tabs (SOURCE_CONCURRENCY).
     n_pages = config.FB_PAGE_FEEDS
     if n_pages > 0 and result.accounts:
-        targets = [a for a in result.accounts if a.username][:n_pages]
-        conc = max(1, min(config.SOURCE_CONCURRENCY, len(targets)))
+        pass
+        # Only pages whose NAME matches the keyword. FB's page search also
+        # returns unrelated pages; scraping those feeds is where off-topic
+        # posts came from (run 111: an "Autozone scam" post under DRDO).
+        _cands = [a for a in result.accounts if a.username]
+        targets, _skipped_pages = [], []
+        for a in _cands:
+            # Score each keyword WORD against the page name so a multi-word
+            # keyword ("DRDO missile") still recognises a page called DPIDRDO.
+            _name_score = max(
+                (keyword_relevancy("", [], f"{a.display_name or ''} {a.username}", [w]) or 0)
+                for w in keyword.split())
+            (targets if _name_score >= config.PAGE_MIN_RELEVANCE else _skipped_pages).append(a)
+        if _skipped_pages:
+            _tick(f"[facebook] {keyword!r}: skipping {len(_skipped_pages)} discovered "
+                  f"page(s) whose name doesn't match the keyword "
+                  f"(e.g. @{_skipped_pages[0].username})")
+        targets = targets[:n_pages]
+        conc = max(1, min(config.SOURCE_CONCURRENCY, max(1, len(targets))))
         _tick(f"[facebook] {keyword!r}: scraping feeds of {len(targets)} discovered "
               f"page(s), {config.FB_POSTS_PER_PAGE} posts each, concurrency {conc}")
         have_urls = {p.post_url for p in result.posts if p.post_url} | set(known_urls)

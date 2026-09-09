@@ -662,7 +662,14 @@ async def search_keyword(
     try:
         if n_acc > 0 and result.accounts and await check_login(page):
             import random as _rnd2
-            targets = [a for a in result.accounts if a.username and not a.is_private][:n_acc]
+            from .helpers import keyword_relevancy as _kwrel
+            _cands = [a for a in result.accounts if a.username and not a.is_private]
+            targets = [a for a in _cands
+                       if max((_kwrel("", [], f"{a.display_name or ''} {a.username}", [w]) or 0)
+                              for w in keyword.split()) >= config.PAGE_MIN_RELEVANCE][:n_acc]
+            if len(_cands) > len(targets):
+                _tick(f"[instagram] {keyword!r}: skipping {len(_cands) - len(targets)} "
+                      f"discovered account(s) whose name doesn't match the keyword")
             have = {p.post_url for p in result.posts if p.post_url} | set(known_urls)
             _tick(f"[instagram] {keyword!r}: pulling recent posts from "
                   f"{len(targets)} discovered account(s)")

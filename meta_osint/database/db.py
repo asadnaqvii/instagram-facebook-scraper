@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,6 +32,27 @@ from ..models import (
     Post,
     SearchResult,
 )
+
+
+def parse_since_days(value) -> Optional[int]:
+    """'24h' -> 1, '7d' -> 7, '30d' -> 30, '2w' -> 14, '30' -> 30, else None."""
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if not v or v in ("all", "any", "0"):
+        return None
+    try:
+        if v.endswith("h"):
+            return max(1, round(int(v[:-1]) / 24))
+        if v.endswith("d"):
+            return int(v[:-1])
+        if v.endswith("w"):
+            return int(v[:-1]) * 7
+        if v.endswith("m"):
+            return int(v[:-1]) * 30
+        return int(v)
+    except ValueError:
+        return None
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -822,8 +843,12 @@ class PostDatabase:
         limit: int = 50,
         offset: int = 0,
         sort: str = "latest",
+        since_days: Optional[int] = None,
     ) -> list[dict]:
         """Fetch posts.
+
+        since_days: only posts whose own timestamp is within the last N days.
+                    Posts with no known date are excluded (nothing to judge).
 
         sort:
           'latest'  — newest by best-available time: the post's own timestamp
@@ -850,6 +875,10 @@ class PostDatabase:
         if keyword:
             where.append("k.keyword=?")
             params.append(keyword)
+        if since_days:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=int(since_days))).isoformat()
+            where.append("p.timestamp IS NOT NULL AND p.timestamp >= ?")
+            params.append(cutoff)
         if where:
             sql.append("WHERE " + " AND ".join(where))
 

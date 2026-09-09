@@ -138,7 +138,8 @@ HUMAN_KEYWORD_PAUSE_S = (
 # the search discovered. Surfaces, comma-separated, tried in order:
 #   posts    /search/posts/?q=          recent   same, newest-first
 #   videos   /search/videos/?q=         hashtag  /hashtag/<keyword>
-FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,hashtag,videos")
+#   reels    /search/reels/?q=  (link grid; caption/likes/date via yt-dlp)
+FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,reels,hashtag,videos")
 # Drop search-surface posts with no keyword signal at all. The NLP relevancy
 # baseline for "keyword appears nowhere" is 15, so 20 removes pure noise while
 # keeping anything with a real match. 0 disables the gate.
@@ -154,6 +155,19 @@ IG_POSTS_PER_ACCOUNT = int(os.getenv("IG_POSTS_PER_ACCOUNT", "6"))
 # account visibly browsing several pages at once — raise with care, and never
 # on a datacenter IP without a sticky residential proxy.
 SOURCE_CONCURRENCY = int(os.getenv("SOURCE_CONCURRENCY", "1"))
+
+# ── Relevance ─────────────────────────────────────────────────────────
+# Multi-word keywords are how you add CONTEXT: "DRDO missile" only keeps
+# posts containing every word (65+) or the phrase (85) or an author match
+# (55). A single stray word (35) or a hashtag-only hit (45) is dropped.
+FB_SEARCH_MIN_RELEVANCE_MULTI = int(os.getenv("FB_SEARCH_MIN_RELEVANCE_MULTI", "50"))
+# Only scrape the feeds of discovered pages/accounts whose NAME matches the
+# keyword (author-match scores 55). FB page-search returns unrelated pages
+# too; without this their feeds pour off-topic posts into the DB.
+PAGE_MIN_RELEVANCE = int(os.getenv("PAGE_MIN_RELEVANCE", "50"))
+# Freshness at collection: drop posts KNOWN to be older than N days.
+# Posts with no date are kept (nothing to judge). 0 = off.
+FRESHNESS_DAYS = int(os.getenv("FRESHNESS_DAYS", "0"))
 
 # When a 429 (rate limit) is detected, pause this long before continuing.
 # Doubles on repeated hits (capped). This is what stops the scraper from

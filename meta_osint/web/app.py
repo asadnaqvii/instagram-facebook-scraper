@@ -14,7 +14,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 
 from .. import config
-from ..database.db import PostDatabase
+from ..database.db import PostDatabase, parse_since_days
 from ..llm.ollama_client import OllamaClient
 from ..llm.healer import SelectorHealer
 from ..orchestrator import ScrapeConfig, run_sync
@@ -294,19 +294,22 @@ def create_app() -> Flask:
         platform = request.args.get("platform") or None
         keyword = request.args.get("keyword") or None
         sort = request.args.get("sort") or "latest"
+        since = request.args.get("since") or ""
+        since_days = parse_since_days(since)
         # 'relevancy' is a display-time derived value, so fetch by a real sort
         # then re-order in Python.
         db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
             ai_scores = db.get_strategic_scores()
             rows = _attach_relevancy(_attach_media_urls(
-                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100)),
+                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100,
+                             since_days=since_days)),
                 ai_scores)
             all_keywords = [k["keyword"] for k in db.get_keywords()]
         if sort == "relevancy":
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("posts.html", posts=rows, platform=platform, keyword=keyword,
-                               sort=sort, all_keywords=all_keywords)
+                               sort=sort, since=since, all_keywords=all_keywords)
 
     @app.route("/keyword/<path:keyword>")
     def keyword_detail(keyword):

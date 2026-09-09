@@ -27,7 +27,7 @@ import uuid
 from flask import Blueprint, current_app, jsonify, request
 
 from .. import config
-from ..database.db import PostDatabase
+from ..database.db import PostDatabase, parse_since_days
 from ..llm.ollama_client import OllamaClient
 
 api = Blueprint("api", __name__)
@@ -242,13 +242,16 @@ def posts():
     sort = request.args.get("sort") or "latest"
     limit = min(_int_arg("limit", 50), 500)
     offset = _int_arg("offset", 0)
+    since = request.args.get("since") or None
+    since_days = parse_since_days(since)
     db_sort = "latest" if sort == "relevancy" else sort
     with _db() as db:
         ai_scores = db.get_strategic_scores()
         rows = _ctx["attach_relevancy"](
             _ctx["attach_media_urls"](
                 db.get_posts(platform=platform, keyword=keyword, author=author,
-                             sort=db_sort, limit=limit, offset=offset)),
+                             sort=db_sort, limit=limit, offset=offset,
+                             since_days=since_days)),
             ai_scores,
         )
     if sort == "relevancy":
@@ -256,7 +259,7 @@ def posts():
     _absolutize_media(rows)
     return _ok(rows, count=len(rows), limit=limit, offset=offset,
                filters={"platform": platform, "keyword": keyword,
-                        "author": author, "sort": sort})
+                        "author": author, "sort": sort, "since": since})
 
 
 @api.get("/posts/<int:post_id>")
