@@ -159,7 +159,11 @@ SORT_MODE = os.getenv("SORT_MODE", "recent").lower()
 # After the normal enrichment pass, visit permalinks of any posts STILL missing
 # a date purely to read it. FB search cards carry no date element, so without
 # this most FB posts have no timestamp and date filters can't see them.
-FB_DATE_BACKFILL = os.getenv("FB_DATE_BACKFILL", "true").lower() == "true"
+# Measured 0/6 on real runs: ~70% of stored FB post_urls are /photo/?fbid=
+# viewer links that render an empty shell with no date, so the extra page
+# visits bought nothing. Off by default; turn on if your keywords yield
+# mostly /videos/, /reel/ or /stories/ URLs, which do carry dates.
+FB_DATE_BACKFILL = os.getenv("FB_DATE_BACKFILL", "false").lower() == "true"
 FB_DATE_BACKFILL_MAX = int(os.getenv("FB_DATE_BACKFILL_MAX", "12"))
 
 FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,reels,hashtag,videos")
@@ -168,7 +172,12 @@ FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,reels,hashtag
 # 55 = author/most-words, 65 = all words, 85 = exact phrase. 35 therefore keeps
 # anything with a real textual match and drops only "linked by search but the
 # keyword appears nowhere". 0 disables the gate.
-FB_SEARCH_MIN_RELEVANCE = int(os.getenv("FB_SEARCH_MIN_RELEVANCE", "35"))
+# 0 = store everything the surfaces return and let the dashboard's relevancy
+# badge / sort do the filtering. That is the right default for a periodic feed:
+# nothing is silently discarded at collection time, and a post you didn't
+# anticipate is still in the DB. Raise to 35 (any word present) or 50
+# (all-words/phrase/author) if a keyword starts producing noise.
+FB_SEARCH_MIN_RELEVANCE = int(os.getenv("FB_SEARCH_MIN_RELEVANCE", "0"))
 # Scrape the feeds of the top N discovered pages (0 disables), posts per page.
 FB_PAGE_FEEDS = int(os.getenv("FB_PAGE_FEEDS", "4"))
 FB_POSTS_PER_PAGE = int(os.getenv("FB_POSTS_PER_PAGE", "6"))
@@ -187,7 +196,7 @@ SOURCE_CONCURRENCY = int(os.getenv("SOURCE_CONCURRENCY", "1"))
 # ("iran us conflict": 30 -> 47). 35 keeps posts matching ANY word of the
 # keyword, which for a topical phrase is usually still on-topic. Raise to 50
 # (all-words/phrase/author only) when a keyword is generating noise.
-FB_SEARCH_MIN_RELEVANCE_MULTI = int(os.getenv("FB_SEARCH_MIN_RELEVANCE_MULTI", "35"))
+FB_SEARCH_MIN_RELEVANCE_MULTI = int(os.getenv("FB_SEARCH_MIN_RELEVANCE_MULTI", "0"))
 # Only scrape the feeds of discovered pages/accounts whose NAME matches the
 # keyword (author-match scores 55). FB page-search returns unrelated pages
 # too; without this their feeds pour off-topic posts into the DB.
