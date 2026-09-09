@@ -666,7 +666,8 @@ async def search_keyword(
             _cands = [a for a in result.accounts if a.username and not a.is_private]
             targets = [a for a in _cands
                        if max((_kwrel("", [], f"{a.display_name or ''} {a.username}", [w]) or 0)
-                              for w in keyword.split()) >= config.PAGE_MIN_RELEVANCE][:n_acc]
+                              for w in ([x for x in keyword.split() if len(x) >= 3] or keyword.split()))
+                       >= config.PAGE_MIN_RELEVANCE][:n_acc]
             if len(_cands) > len(targets):
                 _tick(f"[instagram] {keyword!r}: skipping {len(_cands) - len(targets)} "
                       f"discovered account(s) whose name doesn't match the keyword")

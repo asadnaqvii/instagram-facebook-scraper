@@ -130,6 +130,61 @@ def _relative_to_iso(text: Optional[str]) -> Optional[str]:
     return None
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+_ABS_DATE = re.compile(
+    r"(?:(?P<d1>\d{1,2})\s+(?P<m1>[a-z]{3,9})\.?(?:\s+(?P<y1>\d{4}))?"      # 8 September 2026
+    r"|(?P<m2>[a-z]{3,9})\.?\s+(?P<d2>\d{1,2})(?:,?\s+(?P<y2>\d{4}))?)"     # September 8, 2026
+    r"(?:\s+at\s+(?P<hh>\d{1,2}):(?P<mm>\d{2})\s*(?P<ap>am|pm)?)?", re.I,
+)
+
+
+def _absolute_to_iso(text: Optional[str]) -> Optional[str]:
+    """'Monday, 8 September 2026 at 10:12' / 'September 8 at 10:12 AM' -> ISO.
+    FB puts this on the post-age <abbr>/aria-label; it is exact, unlike the
+    '5h' relative text. Year defaults to the current one (FB omits it for
+    recent posts)."""
+    if not text:
+        return None
+    t = text.strip()
+    now = datetime.now(timezone.utc)
+    # "Today at 14:00" / "Yesterday at 9:05 PM" — FB's label for recent posts.
+    m_rel = re.match(r"^(today|yesterday)(?:\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm)?)?", t, re.I)
+    if m_rel:
+        base = now - (timedelta(days=1) if m_rel.group(1).lower() == "yesterday" else timedelta())
+        if m_rel.group(2):
+            hh, mm, ap = int(m_rel.group(2)), int(m_rel.group(3)), (m_rel.group(4) or "").lower()
+            if ap == "pm" and hh < 12:
+                hh += 12
+            if ap == "am" and hh == 12:
+                hh = 0
+            base = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return base.isoformat()
+    m = _ABS_DATE.search(t)
+    if not m:
+        return None
+    mon = (m.group("m1") or m.group("m2") or "").lower()[:3]
+    if mon not in _MONTHS:
+        return None
+    day = int(m.group("d1") or m.group("d2"))
+    year = int(m.group("y1") or m.group("y2") or now.year)
+    hh = int(m.group("hh") or 0)
+    mm = int(m.group("mm") or 0)
+    ap = (m.group("ap") or "").lower()
+    if ap == "pm" and hh < 12:
+        hh += 12
+    if ap == "am" and hh == 12:
+        hh = 0
+    try:
+        dt = datetime(year, _MONTHS[mon], day, hh, mm, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    # No year given and the date is in the future -> it was last year.
+    if not (m.group("y1") or m.group("y2")) and dt > now + timedelta(days=1):
+        dt = dt.replace(year=year - 1)
+    return dt.isoformat()
+
+
 def _as_int(value) -> Optional[int]:
     """Coerce an engagement value (int from JS, or a '1.2K' string) to int.
 
@@ -288,12 +343,26 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                         // "yesterday"). Lowercase single-letter units only —
                         // "5M"/"12K" are view/like counts, not times.
                         let timeAgo = '';
-                        for (const el of art.querySelectorAll('a[role="link"], a[href], abbr, span')) {
-                            const tt = (el.textContent || '').trim();
-                            if (!tt || tt.length > 14) continue;
-                            if (/^\d+\s?[smhdwy]$/.test(tt) ||
-                                /^(just now|yesterday|\d+\s*(mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?)(\s+ago)?)$/i.test(tt)) {
-                                timeAgo = tt; break;
+                        let timeAbs = '';
+                        const inComment = (el) => !!el.closest('[aria-label^="Comment by"], [aria-label*="omment"], ul');
+                        const dateLike = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
+                        // 1) Absolute date FB attaches to the post-age element.
+                        for (const el of art.querySelectorAll('abbr[aria-label], abbr[title], a[aria-label], span[aria-label]')) {
+                            if (inComment(el)) continue;
+                            const lab = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+                            if (lab && lab.length < 80 && ((dateLike.test(lab) && /\d/.test(lab)) || /^(today|yesterday)/i.test(lab))) { timeAbs = lab; break; }
+                        }
+                        // 2) Relative text ("5h", "2 d") — lowercase single-letter
+                        //    units only; "5M"/"12K" are counts. Skip comment blocks.
+                        if (!timeAbs) {
+                            for (const el of art.querySelectorAll('a[role="link"], a[href], abbr, span')) {
+                                if (inComment(el)) continue;
+                                const tt = (el.textContent || '').trim();
+                                if (!tt || tt.length > 14) continue;
+                                if (/^\d+\s?[smhdwy]$/.test(tt) ||
+                                    /^(just now|yesterday|\d+\s*(mins?|minutes?|hrs?|hours?|days?|weeks?|months?|years?)(\s+ago)?)$/i.test(tt)) {
+                                    timeAgo = tt; break;
+                                }
                             }
                         }
 
@@ -339,6 +408,7 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                             author: author.slice(0, 120),
                             post_url: postUrl,
                             time_ago: timeAgo,
+                            time_abs: timeAbs,
                             images: images.slice(0, 8),
                             likes: reactions,
                             comments: comments,
@@ -404,7 +474,9 @@ async def _dict_to_post(page: Page, raw: dict, keyword: str, with_video: bool = 
         shares=_as_int(raw.get("shares")),
         scraped_at=now_iso(),
     )
-    if raw.get("time_ago"):
+    if raw.get("time_abs"):
+        post.timestamp = _absolute_to_iso(raw.get("time_abs"))
+    if not post.timestamp and raw.get("time_ago"):
         post.timestamp = _relative_to_iso(raw.get("time_ago"))
     # Images.
     for img in (raw.get("images") or [])[: config.MAX_MEDIA_PER_POST]:
@@ -700,9 +772,10 @@ async def search_keyword(
         for a in _cands:
             # Score each keyword WORD against the page name so a multi-word
             # keyword ("DRDO missile") still recognises a page called DPIDRDO.
+            _gate_words = [w for w in keyword.split() if len(w) >= 3] or keyword.split()
             _name_score = max(
                 (keyword_relevancy("", [], f"{a.display_name or ''} {a.username}", [w]) or 0)
-                for w in keyword.split())
+                for w in _gate_words)
             (targets if _name_score >= config.PAGE_MIN_RELEVANCE else _skipped_pages).append(a)
         if _skipped_pages:
             _tick(f"[facebook] {keyword!r}: skipping {len(_skipped_pages)} discovered "

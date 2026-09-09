@@ -179,6 +179,19 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _author_has(author_n: str, kw_n: str, kw_nospace: str) -> bool:
+    """Does the (normalised) author/page name contain the keyword?
+
+    Handles like "DPIDRDO" need substring matching, but a substring test lets a
+    short keyword such as "us" match "Focus" or "Russia". So: words of 4+ chars
+    match as substrings; shorter ones must appear as whole words."""
+    if not author_n or not kw_n:
+        return False
+    if len(kw_nospace) >= 4:
+        return kw_n in author_n or kw_nospace in author_n.replace(" ", "")
+    return bool(re.search(r"(?<![a-z0-9])" + re.escape(kw_n) + r"(?![a-z0-9])", author_n))
+
+
 def keyword_relevancy(
     text: Optional[str],
     hashtags: Optional[list[str]],
@@ -197,7 +210,10 @@ def keyword_relevancy(
       100  exact hashtag match (keyword == a tag, spaces ignored)
        85  full keyword phrase present in the caption text
        65  every word of a multi-word keyword present in text (not adjacent)
-       55  keyword present in the author / display name
+       55  MOST words of a multi-word keyword present (2+, or at least half) —
+           "Iran-US war escalates" for "iran us conflict"
+       55  keyword present in the author / display name (word-boundary for
+           words under 4 chars, so "us" never matches "Focus"/"Russia")
        35  a single word of the keyword overlaps text/tags
        15  found via search but keyword not present in the content
 
@@ -226,10 +242,15 @@ def keyword_relevancy(
         kw_nospace = kw_n.replace(" ", "")
 
         in_caption = bool(kw_n) and kw_n in text_n
-        all_words_in_text = len(kw_words) > 1 and all(w in text_words for w in kw_words)
+        words_hit = sum(1 for w in kw_words if w in text_words)
+        all_words_in_text = len(kw_words) > 1 and words_hit == len(kw_words)
+        # Most-words: 2+ hits and at least half the keyword. Real coverage of a
+        # multi-word topic rarely repeats every word verbatim.
+        most_words_in_text = (len(kw_words) > 1 and words_hit >= 2
+                              and words_hit * 2 >= len(kw_words))
         in_tags = kw_n in tags_n or kw_nospace in tags_nospace
-        in_author = bool(kw_n) and (kw_n in author_n or kw_nospace in author_n.replace(" ", ""))
-        partial = any(w in text_words for w in kw_words) or (
+        in_author = bool(kw_n) and _author_has(author_n, kw_n, kw_nospace)
+        partial = words_hit > 0 or (
             tags_n and any(w in " ".join(tags_n).split() for w in kw_words)
         )
 
@@ -238,6 +259,8 @@ def keyword_relevancy(
             score = 85                       # keyword phrase actually in the caption
         elif all_words_in_text:
             score = 65
+        elif most_words_in_text:
+            score = 55
         elif in_tags:
             # A hashtag match ALONE is weak — a coincidental tag (e.g. a
             # volleyball post tagged #Defence) shouldn't beat real on-topic
@@ -252,7 +275,7 @@ def keyword_relevancy(
 
         # Corroboration bonus: if the keyword appears in MULTIPLE places
         # (caption + tag, or tag + author), it's very likely genuinely on-topic.
-        places = sum([in_caption or all_words_in_text, in_tags, in_author])
+        places = sum([in_caption or all_words_in_text or most_words_in_text, in_tags, in_author])
         if places >= 2:
             score = min(100, score + 25)
 
