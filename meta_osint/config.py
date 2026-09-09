@@ -139,6 +139,19 @@ HUMAN_KEYWORD_PAUSE_S = (
 #   posts    /search/posts/?q=          recent   same, newest-first
 #   videos   /search/videos/?q=         hashtag  /hashtag/<keyword>
 #   reels    /search/reels/?q=  (link grid; caption/likes/date via yt-dlp)
+# FB search lazy-loads in bursts, so the feed harvester needs to scroll well
+# past the target and tolerate flat stretches. Measured: a broad query climbs
+# 5 -> 11 -> 17 -> 23+ with 2-3 flat scrolls between bursts.
+FB_MAX_FEED_SCROLLS = int(os.getenv("FB_MAX_FEED_SCROLLS", "40"))
+# Max cards to walk into view per surface. FB virtualises the results list
+# (off-screen cards are blanked), so each card must be scrolled into view to
+# render before it can be read.
+FB_MAX_FEED_CARDS = int(os.getenv("FB_MAX_FEED_CARDS", "60"))
+# Consecutive scrolls with no new post before we call the feed exhausted.
+FB_FEED_STALL_SCROLLS = int(os.getenv("FB_FEED_STALL_SCROLLS", "6"))
+# Pause after each scroll so the next burst can render (randomised +/-).
+FB_FEED_SETTLE_MS = int(os.getenv("FB_FEED_SETTLE_MS", "1800"))
+
 FB_SEARCH_SURFACES = os.getenv("FB_SEARCH_SURFACES", "posts,recent,reels,hashtag,videos")
 # Drop search-surface posts with no keyword signal at all. The NLP relevancy
 # baseline for "keyword appears nowhere" is 15, so 20 removes pure noise while

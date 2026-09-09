@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -24,7 +25,8 @@ from urllib.parse import quote_plus
 from playwright.async_api import Page
 
 from .. import config
-from ..browser.manager import human_delay, scroll_page, detect_and_handle_rate_limit
+from ..browser.manager import (human_delay, human_mouse, scroll_page,
+                               detect_and_handle_rate_limit)
 from ..llm.healer import SelectorHealer
 from ..models import (
     Account,
@@ -272,23 +274,63 @@ _RECENT_FILTER = quote_plus(base64.b64encode(json.dumps(
 ).encode("utf-8")).decode("ascii"))
 
 
+def _dedup_batch(batch: list[dict], seen_texts: set[str]) -> list[dict]:
+    """Identity-dedup a batch of raw card dicts (shared by both paths)."""
+    fresh = []
+    _seen_before = len(seen_texts)
+    for p in batch:
+        # Identity, best-available. The permalink is the only truly unique key;
+        # text is a fallback for posts whose link we couldn't read. Keying on
+        # text alone silently DROPPED every image/video post with no caption
+        # (very common on FB) because an empty key failed the `if key` test,
+        # and collapsed distinct posts that share a boilerplate opener.
+        url = (p.get("post_url") or "").strip()
+        if url:
+            key = "u:" + url
+        else:
+            text = (p.get("text") or "").strip()
+            if text:
+                key = "t:" + text[:200]
+            else:
+                # No link and no text — fall back to author + engagement so a
+                # media-only post still counts instead of vanishing.
+                key = "a:{}|{}|{}".format(
+                    (p.get("author") or "")[:60],
+                    p.get("likes"), p.get("comments_count"),
+                )
+                if key == "a:||None|None":
+                    continue  # genuinely empty node, skip
+        if key not in seen_texts:
+            seen_texts.add(key)
+            fresh.append(p)
+    # Expose the funnel: how many article nodes the DOM gave us vs how many
+    # were new. A large gap means the feed is repeating (scrolled past the end)
+    # rather than the extractor failing.
+    _last_batch_stats["offered"] = len(batch)
+    _last_batch_stats["fresh"] = len(fresh)
+    return fresh
+
+
+async def _extract_one_card(page: Page, posinset: int, seen_texts: set[str]) -> list[dict]:
+    """Extract the single card with this aria-posinset, right now.
+
+    FB renders only a handful of cards around the viewport and blanks the rest,
+    so a card has to be read while it is in view — scanning the whole feed
+    afterwards only ever returns the current window."""
+    try:
+        batch = await page.evaluate(
+            _FEED_CARD_JS, f'div[aria-posinset="{posinset}"]'
+        )
+    except Exception:
+        return []
+    return _dedup_batch(batch, seen_texts)
+
+
 # Last feed-batch funnel numbers (offered by the DOM vs new after dedup).
 _last_batch_stats: dict[str, int] = {"offered": 0, "fresh": 0}
 
 
-async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: set[str]) -> list[dict]:
-    """Pull post dicts out of whatever feed is currently on screen."""
-    container = await healer.resolve(
-        page, "facebook.search.post_container",
-        description="a container wrapping one post in the feed (author, text, media, engagement)",
-        min_matches=1,
-        expect="text",
-    )
-    if not container.found:
-        return []
-    try:
-        batch = await page.evaluate(
-            r"""(containerSel) => {
+_FEED_CARD_JS = r"""(containerSel) => {
                 const posts = [];
                 document.querySelectorAll(containerSel).forEach(art => {
                     try {
@@ -463,45 +505,28 @@ async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: se
                     } catch (e) { /* skip */ }
                 });
                 return posts;
-            }""",
+            }"""
+
+
+async def _extract_feed_posts(page: Page, healer: SelectorHealer, seen_texts: set[str]) -> list[dict]:
+    """Pull post dicts out of whatever feed is currently on screen."""
+    container = await healer.resolve(
+        page, "facebook.search.post_container",
+        description="a container wrapping one post in the feed (author, text, media, engagement)",
+        min_matches=1,
+        expect="text",
+    )
+    if not container.found:
+        return []
+    try:
+        batch = await page.evaluate(
+            _FEED_CARD_JS,
             container.selector,
         )
     except Exception:
         return []
 
-    fresh = []
-    _seen_before = len(seen_texts)
-    for p in batch:
-        # Identity, best-available. The permalink is the only truly unique key;
-        # text is a fallback for posts whose link we couldn't read. Keying on
-        # text alone silently DROPPED every image/video post with no caption
-        # (very common on FB) because an empty key failed the `if key` test,
-        # and collapsed distinct posts that share a boilerplate opener.
-        url = (p.get("post_url") or "").strip()
-        if url:
-            key = "u:" + url
-        else:
-            text = (p.get("text") or "").strip()
-            if text:
-                key = "t:" + text[:200]
-            else:
-                # No link and no text — fall back to author + engagement so a
-                # media-only post still counts instead of vanishing.
-                key = "a:{}|{}|{}".format(
-                    (p.get("author") or "")[:60],
-                    p.get("likes"), p.get("comments_count"),
-                )
-                if key == "a:||None|None":
-                    continue  # genuinely empty node, skip
-        if key not in seen_texts:
-            seen_texts.add(key)
-            fresh.append(p)
-    # Expose the funnel: how many article nodes the DOM gave us vs how many
-    # were new. A large gap means the feed is repeating (scrolled past the end)
-    # rather than the extractor failing.
-    _last_batch_stats["offered"] = len(batch)
-    _last_batch_stats["fresh"] = len(fresh)
-    return fresh
+    return _dedup_batch(batch, seen_texts)
 
 
 async def _dict_to_post(page: Page, raw: dict, keyword: str, with_video: bool = True) -> Post:
@@ -660,20 +685,58 @@ async def search_keyword(
         if await detect_and_handle_rate_limit(page, "facebook", progress):
             return 0
         before = len(raw_posts)
-        scrolls = min(max(want, 8), config.MAX_SCROLLS)
-        stagnant = 0
-        i = 0
-        for i in range(scrolls):
+        # FB VIRTUALISES the results list: it keeps many cards in the DOM but
+        # renders content only for those near the viewport, blanking the rest.
+        # (Measured live: a card reported textLen=0, then 756 after
+        # scrollIntoView.) So scrolling and scanning whatever is painted always
+        # caps out at ~4 posts. Instead walk each card index into view, let it
+        # render, and extract it.
+        idx = 0                      # next aria-posinset to visit
+        misses = 0                   # consecutive indices that yielded nothing
+        steps = 0
+        max_steps = min(max(want * 3, 30), config.FB_MAX_FEED_CARDS)
+        while len(raw_posts) - before < want and steps < max_steps:
+            steps += 1
+            idx += 1
+            # Bring card `idx` into view; if it doesn't exist yet, scroll to the
+            # bottom so FB appends the next burst, then retry the same index.
+            present = await page.evaluate(
+                """(n) => {
+                    const el = document.querySelector(`div[aria-posinset='${n}']`);
+                    if (!el) return false;
+                    el.scrollIntoView({block: 'center'});
+                    return true;
+                }""",
+                idx,
+            )
+            if not present:
+                idx -= 1                      # retry this index after loading more
+                await scroll_page(page, 1)
+                try:
+                    await page.wait_for_timeout(
+                        int(config.FB_FEED_SETTLE_MS * random.uniform(0.8, 1.4)))
+                except Exception:
+                    pass
+                misses += 1
+                if misses >= config.FB_FEED_STALL_SCROLLS:
+                    break
+                continue
+            # Let the card paint, then read THAT CARD immediately — FB blanks
+            # it again as soon as it leaves the ~5-card render window.
+            try:
+                await page.wait_for_timeout(
+                    int(config.FB_FEED_SETTLE_MS * random.uniform(0.5, 0.9)))
+            except Exception:
+                pass
             b = len(raw_posts)
-            raw_posts.extend(await _extract_feed_posts(page, healer, seen))
-            if len(raw_posts) - before >= want:
+            raw_posts.extend(await _extract_one_card(page, idx, seen))
+            misses = 0 if len(raw_posts) > b else misses + 1
+            if misses >= config.FB_FEED_STALL_SCROLLS:
                 break
-            stagnant = stagnant + 1 if len(raw_posts) == b else 0
-            if stagnant >= 3:
-                break
-            await scroll_page(page, 1)
+            await human_mouse(page)
         gained = len(raw_posts) - before
-        _tick(f"[facebook] {keyword!r}: {label}: +{gained} post(s) in {i + 1} scroll(s)")
+        _tick(f"[facebook] {keyword!r}: {label}: +{gained} post(s) "
+              f"from {idx} card(s) visited")
         return gained
 
     async def _harvest_reels(url: str, want: int) -> int:
@@ -698,7 +761,7 @@ async def search_keyword(
             return 0
         links = await _collect_links(
             page, 'a[href*="/reel/"]',
-            max_scrolls=min(max(want // 4, 3), config.MAX_SCROLLS),
+            max_scrolls=min(max(want, 8), config.FB_MAX_FEED_SCROLLS),
         )
         have = {r.get("post_url") for r in raw_posts if r.get("post_url")}
         gained = 0
