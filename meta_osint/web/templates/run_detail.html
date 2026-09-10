@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Run {{ job.id }} · meta_osint{% endblock %}
+{% block body %}
+
+{% macro dur(s) %}
+  {%- if s is none -%}—
+  {%- elif s < 60 -%}{{ '%.0f'|format(s) }}s
+  {%- elif s < 3600 -%}{{ (s // 60)|int }}m {{ (s % 60)|int }}s
+  {%- else -%}{{ (s // 3600)|int }}h {{ ((s % 3600) // 60)|int }}m
+  {%- endif -%}
+{% endmacro %}
+
+<p class="muted micro" style="margin-bottom:var(--sp-2);">
+  <a href="{{ url_for('runs_history') }}">← Run history</a>
+</p>
+<div style="display:flex; align-items:baseline; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-5);">
+  <h1 style="margin:0;">Run <span class="mono" style="font-size:20px; color:var(--fg-2);">{{ job.id }}</span></h1>
+  <span class="micro">
+    {%- if job.status == 'done' %}<span class="status-done">✓ done</span>
+    {%- elif job.status == 'running' %}<span class="status-run">⏳ running</span>
+    {%- elif job.status == 'error' %}<span class="status-err">⚠ error</span>
+    {%- else %}<span class="muted">{{ job.status }}</span>{% endif -%}
+  </span>
+  {% if job.status == 'running' %}
+  <a class="ghost micro" href="{{ url_for('job_status', job_id=job.id) }}">Live view →</a>
+  {% endif %}
+</div>
+
+{% set b = (job.params or {}).get('batch') %}
+{% if b %}
+<p style="font-size:14px;">
+  Batch of <strong>{{ b.keywords }}</strong> keyword{{ 's' if b.keywords != 1 }} from
+  {% for c in b.categories %}<span class="kw">{{ c }}</span> {% endfor %}
+  {%- if b.since %} · <span class="muted">posts newer than {{ b.since }}d</span>{% endif %}
+  {%- if b.category_id %} · <a href="{{ url_for('category_detail', category_id=b.category_id) }}">view category results →</a>{% endif %}
+</p>
+{% endif %}
+
+{% if job.error %}
+<p style="background:var(--threat-critical-tint); border:1px solid var(--threat-critical); color:#ff9b95; padding:10px 14px; border-radius:var(--r-2); max-width:760px;">⚠️ {{ job.error }}</p>
+{% endif %}
+
+{% if job.keywords_progress %}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Per-keyword outcome</h2>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Keyword</th>
+        <th style="width:100px;">Platform</th>
+        <th style="width:96px;">Status</th>
+        <th class="num" style="width:64px;">Posts</th>
+        <th class="num" style="width:84px;">Took</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in job.keywords_progress %}
+      <tr>
+        <td><a href="{{ url_for('posts', keyword=r.keyword, limit='all') }}">{{ r.keyword }}</a></td>
+        <td class="muted">{{ r.platform }}</td>
+        <td class="micro">
+          {%- if r.status == 'done' %}<span class="status-done">✓ done</span>
+          {%- elif r.status == 'running' %}<span class="status-run">⏳ running</span>
+          {%- else %}<span class="status-err" title="{{ r.error or '' }}">⚠ error</span>{% endif -%}
+        </td>
+        <td class="num">{{ r.posts if r.posts is not none else '' }}</td>
+        <td class="num">{{ dur(r.elapsed_s) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0;">Log</h2>
+  {% if job.log %}
+  <pre class="mono" style="background:var(--bg-surface-1); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-4); max-height:560px; overflow:auto; font-size:12px; line-height:1.6;">{% for line in job.log %}{{ line }}
+{% endfor %}</pre>
+  {% else %}
+  <p class="muted">No log was captured for this job.</p>
+  {% endif %}
+</div>
+{% endblock %}

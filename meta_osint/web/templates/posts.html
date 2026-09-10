@@ -26,6 +26,10 @@
     <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
     <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option>
   </select>
+  <select name="category" title="Show posts collected by any keyword in this category">
+    <option value="">All categories</option>
+    {% for c in all_categories %}<option value="{{ c.id }}" {{ 'selected' if category and category.id == c.id }}>{{ c.name }}</option>{% endfor %}
+  </select>
   <select name="keyword">
     <option value="">All keywords</option>
     {% for k in all_keywords %}<option value="{{ k }}" {{ 'selected' if keyword==k }}>{{ k }}</option>{% endfor %}
@@ -44,7 +48,6 @@
     <option value="90d" {{ 'selected' if since=='90d' }}>Last 90 days</option>
   </select>
   {% if limit is not defined or limit is none %}<input type="hidden" name="limit" value="all">{% endif %}
-  {% if category %}<input type="hidden" name="category" value="{{ category.id }}">{% endif %}
   <button>Filter</button>
 </form>
 

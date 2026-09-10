@@ -58,6 +58,7 @@
       <a href="{{ url_for('strategic') }}" class="{{ 'active' if path.startswith('/strategic') }}"><span class="rail-label" style="color:var(--brand-signal);">✦</span> Strategic Intelligence</a>
       <div style="height:1px; background:var(--border-default); margin:10px 8px;"></div>
       <a href="{{ url_for('categories') }}" class="{{ 'active' if path.startswith('/categories') }}"><span class="rail-label">▦</span> Categories</a>
+      <a href="{{ url_for('runs_history') }}" class="{{ 'active' if path.startswith('/runs') or path.startswith('/run/') }}"><span class="rail-label">◷</span> Run history</a>
       <a href="{{ url_for('scrape') }}" class="{{ 'active' if path.startswith('/scrape') or path.startswith('/job') }}"><span class="rail-label" style="color:var(--brand-signal);">＋</span> New scrape</a>
     </nav>
 

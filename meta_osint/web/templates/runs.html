@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Run history · meta_osint{% endblock %}
+{% block body %}
+
+{% macro dur(s) %}
+  {%- if s is none -%}—
+  {%- elif s < 60 -%}{{ '%.0f'|format(s) }}s
+  {%- elif s < 3600 -%}{{ (s // 60)|int }}m {{ (s % 60)|int }}s
+  {%- else -%}{{ (s // 3600)|int }}h {{ ((s % 3600) // 60)|int }}m
+  {%- endif -%}
+{% endmacro %}
+
+<h1 style="margin-bottom:var(--sp-5);">Run history</h1>
+
+{% if last_batch %}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Most recent batch</h2>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:var(--sp-5);">
+    <div><label>Elapsed</label><p style="font-size:22px; margin:0;">{{ dur(last_batch.span_s) }}</p></div>
+    <div><label>Keywords</label><p style="font-size:22px; margin:0;">{{ last_batch.keywords }}</p></div>
+    <div><label>Posts</label><p style="font-size:22px; margin:0;">{{ last_batch.posts }}</p></div>
+    <div><label>Avg / keyword</label><p style="font-size:22px; margin:0;">{{ dur(last_batch.avg_run_s) }}</p></div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Jobs (what you launched) ────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Scrape &amp; batch jobs</h2>
+  <p class="muted micro" style="margin-top:0;">
+    Every job you started, with its full log. Logs are written to the database as
+    a job runs, so they survive a restart.
+  </p>
+  {% if jobs %}
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:88px;">Job</th>
+        <th>What it ran</th>
+        <th style="width:150px;">Started</th>
+        <th class="num" style="width:76px;">Keywords</th>
+        <th class="num" style="width:64px;">Posts</th>
+        <th style="width:90px;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr>
+        <td><a href="{{ url_for('run_detail', job_id=j.id) }}" class="mono">{{ j.id }}</a></td>
+        <td>
+          {%- set b = (j.params or {}).get('batch') -%}
+          {%- if b -%}
+            {% for c in b.categories %}<span class="kw">{{ c }}</span> {% endfor %}
+          {%- else -%}
+            {% for k in ((j.params or {}).get('keywords') or [])[:6] %}<span class="kw">{{ k }}</span> {% endfor %}
+            {%- if ((j.params or {}).get('keywords') or [])|length > 6 %}
+            <span class="muted micro">+{{ ((j.params or {}).get('keywords') or [])|length - 6 }} more</span>{% endif %}
+          {%- endif -%}
+        </td>
+        <td class="muted micro">{{ (j.started_at or '')[:16] }}</td>
+        <td class="num">{{ j.keyword_count }}</td>
+        <td class="num">{{ j.posts }}</td>
+        <td class="micro">
+          {%- if j.status == 'done' %}<span class="status-done">✓ done</span>
+          {%- elif j.status == 'running' %}<span class="status-run">⏳ running</span>
+          {%- elif j.status == 'error' %}<span class="status-err">⚠ error</span>
+          {%- else %}<span class="muted">{{ j.status }}</span>{% endif -%}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No jobs recorded yet. Jobs started from now on appear here with their logs.</p>
+  {% endif %}
+</div>
+
+{# ── Per-keyword runs ────────────────────────────────────────────────── #}
+<div class="card">
+  <h2 style="margin-top:0;">Per-keyword runs</h2>
+  <p class="muted micro" style="margin-top:0;">
+    One row per keyword per platform — how long each took and what it returned.
+  </p>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Keyword</th>
+        <th style="width:100px;">Platform</th>
+        <th style="width:150px;">Started</th>
+        <th class="num" style="width:90px;">Took</th>
+        <th class="num" style="width:64px;">Posts</th>
+        <th style="width:190px;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td><a href="{{ url_for('posts', keyword=r.keyword, limit='all') }}">{{ r.keyword }}</a></td>
+        <td class="muted">{{ r.platform }}</td>
+        <td class="muted micro">{{ (r.started_at or '')[:16] }}</td>
+        <td class="num">{{ dur(r.duration_s) }}</td>
+        <td class="num">{{ r.posts_found }}</td>
+        <td class="micro">
+          {%- if r.error %}<span style="color:var(--threat-critical);" title="{{ r.error }}">{{ r.error[:30] }}</span>
+          {%- elif not r.finished_at %}<span class="muted">unfinished</span>
+          {%- else %}<span class="muted">ok</span>{% endif -%}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

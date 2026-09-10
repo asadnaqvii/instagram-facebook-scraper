@@ -74,6 +74,26 @@ def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
     def should_stop() -> bool:
         return JOBS.get(job_id, {}).get("cancel", False)
 
+    def _persist() -> None:
+        """Write the job to the DB so its log survives a restart. Best-effort:
+        losing the log must never take down the scrape itself."""
+        try:
+            with PostDatabase(config.DB_PATH) as _db:
+                _db.save_job(JOBS[job_id])
+        except Exception:  # noqa: BLE001
+            pass
+
+    _persist()
+    # Checkpoint the log periodically; a long batch otherwise only lands on
+    # disk at the very end, which is exactly when a crash loses it.
+    _stop_ticker = threading.Event()
+
+    def _ticker() -> None:
+        while not _stop_ticker.wait(20):
+            _persist()
+
+    threading.Thread(target=_ticker, daemon=True).start()
+
     try:
         result = run_sync(cfg, progress, should_stop, on_event)
         # If the user hit stop, mark it 'stopped' rather than 'done'.
@@ -82,6 +102,9 @@ def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
     except Exception as e:  # noqa: BLE001
         JOBS[job_id]["status"] = "error"
         JOBS[job_id]["error"] = str(e)
+    finally:
+        _stop_ticker.set()
+        _persist()
 
 
 # Upper bound on posts scored per enrich run — a safety cap, not a limit users
@@ -359,6 +382,7 @@ def create_app() -> Flask:
                              category_id=category_id)),
                 ai_scores)
             all_keywords = [k["keyword"] for k in db.get_keywords()]
+            all_categories = db.get_categories()
             category = db.get_category(category_id) if category_id else None
             total = db.count_posts(platform=platform, keyword=keyword,
                                    since_days=since_days, category_id=category_id)
@@ -366,6 +390,7 @@ def create_app() -> Flask:
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("posts.html", posts=rows, platform=platform, keyword=keyword,
                                sort=sort, since=since, all_keywords=all_keywords,
+                               all_categories=all_categories,
                                category=category, total=total, limit=limit)
 
     @app.route("/keyword/<path:keyword>")
@@ -398,6 +423,42 @@ def create_app() -> Flask:
     # ── Strategic Intelligence (AI enrichment) ───────────────────────
 
     # ── categories (keyword groups + batch runs) ──────────────────
+
+    @app.route("/runs")
+    def runs_history():
+        """Past scrape/batch jobs with their logs, plus per-keyword run history.
+
+        Job logs used to live only in memory, so a restart erased them; they
+        are now written to the `jobs` table as each job progresses."""
+        with PostDatabase(config.DB_PATH) as db:
+            jobs = db.get_jobs(limit=60)
+            runs = db.get_run_history(limit=120)
+            last_batch = db.get_last_batch_timing()
+        # A job still in this process has a live log; prefer it.
+        for j in jobs:
+            live = JOBS.get(j["id"])
+            if live:
+                j["status"] = live.get("status", j["status"])
+        return render_template("runs.html", jobs=jobs, runs=runs,
+                               last_batch=last_batch, path=request.path)
+
+    @app.route("/run/<job_id>")
+    def run_detail(job_id):
+        """One past job: its full log and per-keyword outcome."""
+        live = JOBS.get(job_id)
+        with PostDatabase(config.DB_PATH) as db:
+            job = db.get_job(job_id)
+        if not job and not live:
+            abort(404)
+        if live:
+            # Live job wins — it has the newest log lines.
+            job = {**(job or {}), "id": job_id, "status": live.get("status"),
+                   "log": live.get("log") or [],
+                   "keywords_progress": live.get("keywords_progress") or [],
+                   "error": live.get("error"),
+                   "params": {"keywords": live.get("keywords"),
+                              "batch": live.get("batch")}}
+        return render_template("run_detail.html", job=job, path=request.path)
 
     @app.route("/categories")
     def categories():

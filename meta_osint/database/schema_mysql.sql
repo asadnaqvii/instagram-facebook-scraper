@@ -262,6 +262,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     params       JSON,                             -- keywords, platforms, rescore, etc.
     log          JSON,                             -- array of progress strings
     result       JSON,
+    -- Per-keyword outcome rows the job page renders live (keyword, platform,
+    -- status, posts, elapsed). Kept with the job so a finished run can be
+    -- reviewed after a restart.
+    keywords_progress JSON,
     error        TEXT,
     started_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

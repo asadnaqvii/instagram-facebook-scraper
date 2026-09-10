@@ -375,6 +375,21 @@ class PostDatabase:
             -- unaffected.
             --   code   : short stable handle ('a'..'p' in the seed set)
             --   weight : W1/W2/W3 priority — W3 runs first in a batch
+            -- Scrape/batch jobs. The web layer used to keep these in an
+            -- in-memory dict, so a restart erased every past run's log.
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL DEFAULT 'scrape',
+                status TEXT NOT NULL DEFAULT 'queued',
+                params TEXT,
+                log TEXT,
+                result TEXT,
+                error TEXT,
+                keywords_progress TEXT,
+                started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT UNIQUE,
@@ -470,6 +485,15 @@ class PostDatabase:
                     "WHERE table_schema = DATABASE() AND table_name = 'posts'"
                 )
             }
+            jobcols = {
+                r["COLUMN_NAME"] if "COLUMN_NAME" in r else r["column_name"]
+                for r in c.execute(
+                    "SELECT COLUMN_NAME FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND table_name = 'jobs'"
+                )
+            }
+            if jobcols and "keywords_progress" not in jobcols:
+                c.execute("ALTER TABLE jobs ADD COLUMN keywords_progress JSON")
             if "strategic_relevance" not in existing:
                 c.execute("ALTER TABLE posts ADD COLUMN strategic_relevance INT")
             if "strategic_rationale" not in existing:
@@ -1301,7 +1325,7 @@ class PostDatabase:
         # Run counts/timings come from a second pass so the duration handling
         # stays in one place (_duration_s) for both backends.
         runs = conn.execute(
-            """SELECT sr.keyword_id AS kid, sr.started_at, sr.finished_at
+            """SELECT sr.keyword_id AS kid, sr.started_at, sr.finished_at, sr.error
                FROM search_runs sr
                JOIN category_keywords ck ON ck.keyword_id = sr.keyword_id
                WHERE ck.category_id = ?""",
@@ -1318,7 +1342,8 @@ class PostDatabase:
             started = _dt_to_str(row.get("started_at"))
             if started and (a["last"] is None or started > a["last"]):
                 a["last"] = started
-            dur = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            dur = (None if row.get("error") and "interrupted" in str(row["error"])
+                   else self._duration_s(row.get("started_at"), row.get("finished_at")))
             if dur is not None:
                 a["total"] += dur
                 a["timed"] += 1
@@ -1343,16 +1368,103 @@ class PostDatabase:
         conn = self.connect()
         cutoff = (datetime.now(timezone.utc)
                   - timedelta(minutes=older_than_minutes)).isoformat()
+        # Leave finished_at NULL: stamping "now" would invent a duration of
+        # hours for a run that died in its first minute, wrecking the averages.
+        # The error column is what marks it dead; _duration_s ignores it.
         cur = conn.execute(
-            "UPDATE search_runs SET finished_at=?, error=? "
-            "WHERE finished_at IS NULL AND started_at < ?",
-            (datetime.now(timezone.utc).isoformat(),
-             "interrupted (process ended before the keyword finished)",
-             cutoff),
+            "UPDATE search_runs SET error=? "
+            "WHERE finished_at IS NULL AND error IS NULL AND started_at < ?",
+            ("interrupted (process ended before the keyword finished)", cutoff),
         )
         n = cur.rowcount or 0
         conn.commit()
         return n
+
+    # ── job persistence ────────────────────────────────
+
+    def save_job(self, job: dict) -> None:
+        """Write (or update) one job row.
+
+        Called on every status change and periodically while running, so a
+        crash or restart still leaves the log on disk. JSON columns are stored
+        as text on both backends (MySQL accepts a JSON string on insert)."""
+        import json as _json
+
+        jid = job.get("id")
+        if not jid:
+            return
+        payload = {
+            "kind": job.get("kind", "scrape"),
+            "status": job.get("status", "queued"),
+            "params": _json.dumps({k: job.get(k) for k in
+                                   ("keywords", "batch", "platforms") if job.get(k) is not None}),
+            "log": _json.dumps(job.get("log") or []),
+            "result": _json.dumps(job.get("result")) if job.get("result") else None,
+            "error": job.get("error"),
+            "keywords_progress": _json.dumps(job.get("keywords_progress") or []),
+            "updated_at": _iso(datetime.now(timezone.utc)),
+        }
+        conn = self.connect()
+        exists = conn.execute("SELECT id FROM jobs WHERE id=?", (jid,)).fetchone()
+        if exists:
+            cols = ", ".join(f"{k}=?" for k in payload)
+            conn.execute(f"UPDATE jobs SET {cols} WHERE id=?",
+                         tuple(payload.values()) + (jid,))
+        else:
+            payload["id"] = jid
+            payload["started_at"] = _iso(datetime.now(timezone.utc))
+            keys = ", ".join(payload)
+            marks = ", ".join("?" for _ in payload)
+            conn.execute(f"INSERT INTO jobs ({keys}) VALUES ({marks})",
+                         tuple(payload.values()))
+        conn.commit()
+
+    def get_jobs(self, limit: int = 50) -> list[dict]:
+        """Past jobs, newest first, without their (large) logs."""
+        import json as _json
+
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT id, kind, status, params, result, error, started_at, updated_at, "
+            "keywords_progress FROM jobs ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        out = []
+        for r in rows:
+            j = dict(r)
+            for key in ("params", "result", "keywords_progress"):
+                if j.get(key):
+                    try:
+                        j[key] = _json.loads(j[key]) if isinstance(j[key], str) else j[key]
+                    except (ValueError, TypeError):
+                        j[key] = None
+            j["started_at"] = _dt_to_str(j.get("started_at"))
+            j["updated_at"] = _dt_to_str(j.get("updated_at"))
+            prog = j.get("keywords_progress") or []
+            j["posts"] = sum((p.get("posts") or 0) for p in prog)
+            j["keyword_count"] = len({p.get("keyword") for p in prog}) or len(
+                (j.get("params") or {}).get("keywords") or [])
+            out.append(j)
+        return out
+
+    def get_job(self, job_id: str) -> Optional[dict]:
+        """One job with its full log."""
+        import json as _json
+
+        conn = self.connect()
+        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        j = dict(row)
+        for key in ("params", "log", "result", "keywords_progress"):
+            if j.get(key):
+                try:
+                    j[key] = _json.loads(j[key]) if isinstance(j[key], str) else j[key]
+                except (ValueError, TypeError):
+                    j[key] = None
+        j["started_at"] = _dt_to_str(j.get("started_at"))
+        j["updated_at"] = _dt_to_str(j.get("updated_at"))
+        return j
 
     # ── run timing ────────────────────────────────────
 
@@ -1402,7 +1514,10 @@ class PostDatabase:
         out = []
         for r in conn.execute(sql, tuple(params)):
             row = dict(r)
-            row["duration_s"] = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            # An interrupted run has no meaningful duration even if a previous
+            # version stamped a finished_at on it.
+            row["duration_s"] = (None if row.get("error") and "interrupted" in str(row["error"])
+                                 else self._duration_s(row.get("started_at"), row.get("finished_at")))
             row["started_at"] = _dt_to_str(row.get("started_at"))
             row["finished_at"] = _dt_to_str(row.get("finished_at"))
             row["posts_found"] = _num(row.get("posts_found")) or 0
@@ -1418,7 +1533,7 @@ class PostDatabase:
         conn = self.connect()
         rows = conn.execute(
             """SELECT ck.category_id AS cid, sr.started_at, sr.finished_at,
-                      sr.posts_found
+                      sr.posts_found, sr.error
                FROM search_runs sr
                JOIN category_keywords ck ON ck.keyword_id = sr.keyword_id"""
         )
@@ -1429,7 +1544,8 @@ class PostDatabase:
             a = agg.setdefault(cid, {"runs": 0, "total_s": 0.0, "timed_runs": 0, "posts": 0})
             a["runs"] += 1
             a["posts"] += _num(row.get("posts_found")) or 0
-            dur = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            dur = (None if row.get("error") and "interrupted" in str(row["error"])
+                   else self._duration_s(row.get("started_at"), row.get("finished_at")))
             if dur is not None:
                 a["total_s"] += dur
                 a["timed_runs"] += 1
