@@ -19,6 +19,7 @@ import json
 import random
 import re
 from datetime import datetime, timedelta, timezone
+from time import monotonic as _monotonic
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -665,6 +666,24 @@ async def search_keyword(
     seen: set[str] = set()
     filtered_out = 0
 
+    # Hard time budget for this keyword. Checked at every expensive boundary so
+    # a slow keyword winds down gracefully (keeping what it collected) instead
+    # of running for hours and blocking the rest of a batch.
+    _budget = config.KEYWORD_BUDGET_S
+    _deadline = (_monotonic() + _budget) if _budget > 0 else None
+    _budget_hit = False
+
+    def _out_of_time(where: str = "") -> bool:
+        nonlocal _budget_hit
+        if _deadline is None or _monotonic() < _deadline:
+            return False
+        if not _budget_hit:
+            _budget_hit = True
+            _tick(f"[facebook] {keyword!r}: time budget ({_budget}s) reached"
+                  f"{' during ' + where if where else ''} — keeping "
+                  f"{len(raw_posts)} raw post(s) and moving on")
+        return True
+
     async def _harvest_feed(url: str, label: str, want: int) -> int:
         """Navigate to a feed URL and pull article posts into raw_posts.
 
@@ -696,6 +715,8 @@ async def search_keyword(
             return 0
         if await detect_and_handle_rate_limit(page, "facebook", progress):
             return 0
+        if _out_of_time(label):
+            return 0
         before = len(raw_posts)
         # FB VIRTUALISES the results list: it keeps many cards in the DOM but
         # renders content only for those near the viewport, blanking the rest.
@@ -708,6 +729,11 @@ async def search_keyword(
         steps = 0
         max_steps = min(max(want * 3, 30), config.FB_MAX_FEED_CARDS)
         while len(raw_posts) - before < want and steps < max_steps:
+            # The single place a keyword can burn hours: each iteration may
+            # scroll, wait for a render and run yt-dlp. Check the clock here,
+            # not just between surfaces.
+            if _out_of_time(label):
+                break
             steps += 1
             idx += 1
             # Bring card `idx` into view; if it doesn't exist yet, scroll to the
@@ -813,6 +839,8 @@ async def search_keyword(
         for sname in surfaces:
             if len(raw_posts) >= max_posts:
                 break
+            if _out_of_time("search surfaces"):
+                break
             if sname not in surface_urls:
                 _tick(f"[facebook] {keyword!r}: unknown surface {sname!r} ignored")
                 continue
@@ -896,6 +924,11 @@ async def search_keyword(
     # whereas search hands back a thin, personalised slice. Independent
     # sources, so they can run in parallel tabs (SOURCE_CONCURRENCY).
     n_pages = config.FB_PAGE_FEEDS
+    # Page feeds are the second-biggest time sink after the search surfaces;
+    # once the budget is gone they must be skipped too, or an expired keyword
+    # still runs for minutes.
+    if _out_of_time("page feeds"):
+        n_pages = 0
     if n_pages > 0 and result.accounts:
         pass
         # Only pages whose NAME matches the keyword. FB's page search also

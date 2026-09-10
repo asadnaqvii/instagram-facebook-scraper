@@ -125,6 +125,14 @@ HUMAN_LONG_BREAK_RANGE_S = (
 HUMAN_MOUSE_CHANCE = float(os.getenv("HUMAN_MOUSE_CHANCE", "0.55"))
 HUMAN_SCROLLBACK_CHANCE = float(os.getenv("HUMAN_SCROLLBACK_CHANCE", "0.12"))
 # Pause between keywords so a multi-keyword run isn't a uniform march.
+# Hard ceiling on how long ONE keyword may spend on ONE platform, in seconds.
+# Without this a single keyword can run for hours (5 surfaces x 40 scrolls +
+# discovered page feeds + per-post media), blocking every keyword behind it in
+# a batch. On expiry the scraper stops collecting and keeps what it has —
+# posts already gathered are streamed to the DB, so nothing is lost.
+# 0 disables the budget (unbounded, the old behaviour).
+KEYWORD_BUDGET_S = int(os.getenv("KEYWORD_BUDGET_S", "240"))
+
 HUMAN_KEYWORD_PAUSE_S = (
     float(os.getenv("HUMAN_KEYWORD_PAUSE_MIN_S", "4.0")),
     float(os.getenv("HUMAN_KEYWORD_PAUSE_MAX_S", "16.0")),

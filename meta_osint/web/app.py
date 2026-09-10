@@ -262,6 +262,17 @@ def _related_keywords(db, top: int = 10, per: int = 5, min_shared: int = 2) -> l
 
 
 def create_app() -> Flask:
+    # A crash or restart leaves search_runs rows open forever; close them once
+    # at startup so run history and category averages aren't skewed by a run
+    # that can never finish.
+    try:
+        with PostDatabase(config.DB_PATH) as _db:
+            _stale = _db.close_stale_runs()
+            if _stale:
+                print(f"[startup] closed {_stale} interrupted run(s) from a previous session")
+    except Exception as _e:  # noqa: BLE001 - never block startup on bookkeeping
+        print(f"[startup] could not close stale runs: {type(_e).__name__}: {_e}")
+
     app = Flask(__name__, template_folder="templates")
     app.secret_key = "meta-osint-dev"
     # Pick up template edits without a server restart (local dashboard).

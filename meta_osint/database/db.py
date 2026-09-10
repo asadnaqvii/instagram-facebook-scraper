@@ -1332,6 +1332,28 @@ class PostDatabase:
         out.sort(key=lambda k: (-k["posts"], -k["runs"], k["keyword"].lower()))
         return out
 
+    def close_stale_runs(self, older_than_minutes: int = 90) -> int:
+        """Mark long-open runs as interrupted.
+
+        A run row is opened when a keyword starts and closed by finish_run().
+        If the process dies in between (crash, restart, killed job) the row
+        stays open forever — it then counts as a run with no duration and the
+        UI shows it as perpetually 'unfinished'. Called on connect; returns how
+        many rows were closed."""
+        conn = self.connect()
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(minutes=older_than_minutes)).isoformat()
+        cur = conn.execute(
+            "UPDATE search_runs SET finished_at=?, error=? "
+            "WHERE finished_at IS NULL AND started_at < ?",
+            (datetime.now(timezone.utc).isoformat(),
+             "interrupted (process ended before the keyword finished)",
+             cutoff),
+        )
+        n = cur.rowcount or 0
+        conn.commit()
+        return n
+
     # ── run timing ────────────────────────────────────
 
     @staticmethod

@@ -17,6 +17,7 @@ DOM at all.
 from __future__ import annotations
 
 import asyncio
+from time import monotonic as _monotonic
 from typing import Optional
 
 from playwright.async_api import Page
@@ -582,12 +583,31 @@ async def search_keyword(
             tag_candidates.append(_t)
     tag_candidates = tag_candidates[:4]
 
+    # Hard time budget for this keyword (see config.KEYWORD_BUDGET_S). Checked
+    # before each tag and each discovered account feed, so a slow keyword keeps
+    # what it collected instead of blocking the rest of a batch.
+    _budget = config.KEYWORD_BUDGET_S
+    _deadline = (_monotonic() + _budget) if _budget > 0 else None
+    _budget_hit = [False]
+
+    def _out_of_time(where: str = "") -> bool:
+        if _deadline is None or _monotonic() < _deadline:
+            return False
+        if not _budget_hit[0]:
+            _budget_hit[0] = True
+            _tick(f"[instagram] {keyword!r}: time budget ({_budget}s) reached"
+                  f"{' during ' + where if where else ''} — keeping what was "
+                  f"collected and moving on")
+        return True
+
     try:
         ig_cap = config.IG_MAX_POSTS_CAP or max_posts
         want = min(max_posts, ig_cap)
         links: list[str] = []
         used_tag = tag
         for _cand in tag_candidates:
+            if _out_of_time("hashtag grids"):
+                break
             await page.goto(f"{IG}/explore/tags/{_cand}/", wait_until="domcontentloaded", timeout=25000)
             await human_delay("action", "instagram")
             if await detect_and_handle_rate_limit(page, "instagram", progress):
@@ -674,6 +694,8 @@ async def search_keyword(
     # constantly, so their feeds are where the on-topic volume actually is.
     n_acc = config.IG_ACCOUNT_FEEDS
     try:
+        if _out_of_time("account feeds"):
+            n_acc = 0
         if n_acc > 0 and result.accounts and await check_login(page):
             import random as _rnd2
             from .helpers import keyword_relevancy as _kwrel
