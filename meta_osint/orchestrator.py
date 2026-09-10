@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import random as _random
+import time as _time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -29,6 +30,9 @@ from .scraper import instagram as ig
 from .scraper import media as media_mod
 
 ProgressFn = Callable[[str], None]
+# Structured run events, so a UI can show per-keyword state instead of
+# scraping it back out of log strings.
+EventFn = Callable[[dict], None]
 StopFn = Callable[[], bool]   # returns True when the user asked to stop
 
 
@@ -87,9 +91,18 @@ async def scrape_platform(
     healer: SelectorHealer,
     progress: Optional[ProgressFn] = None,
     should_stop: Optional[StopFn] = None,
+    on_event: Optional[EventFn] = None,
 ) -> list[dict]:
     """Run every keyword for one platform on a single CDP connection."""
     summaries: list[dict] = []
+
+    def _emit(kind: str, **kw) -> None:
+        if on_event:
+            try:
+                on_event({"event": kind, "platform": platform, **kw})
+            except Exception:  # noqa: BLE001 - UI bookkeeping must never break a run
+                pass
+
     if _stopped(should_stop):
         return summaries
     try:
@@ -124,6 +137,8 @@ async def scrape_platform(
                 _log(progress, f"[{platform}] stopped by user — {len(summaries)} keyword(s) done, remaining skipped")
                 break
             _log(progress, f"[{platform}] {cfg.mode}: {kw!r} ...")
+            _kw_started = _time.monotonic()
+            _emit("keyword_start", keyword=kw)
             run_id = db.start_run(kw, platform, _now_iso())
             result = None
             # Attempt the keyword; if the page has died (crashed tab, hung nav),
@@ -237,6 +252,12 @@ async def scrape_platform(
             db.finish_run(run_id, result)
             summary = {**result.summary(), "stored": counts, "refreshed": refreshed_n}
             summaries.append(summary)
+            _emit("keyword_done", keyword=kw,
+                  posts=counts.get("posts", 0),
+                  accounts=counts.get("accounts", 0),
+                  refreshed=refreshed_n,
+                  elapsed_s=round(_time.monotonic() - _kw_started, 1),
+                  error=result.error)
             _log(
                 progress,
                 f"[{platform}] {kw!r}: {counts['posts']} new posts, {refreshed_n} refreshed, "
@@ -250,7 +271,8 @@ async def scrape_platform(
 
 
 async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
-              should_stop: Optional[StopFn] = None) -> dict:
+              should_stop: Optional[StopFn] = None,
+              on_event: Optional[EventFn] = None) -> dict:
     """Top-level: scrape all keywords across all requested platforms.
 
     Platforms run CONCURRENTLY — Instagram and Facebook are independent CDP
@@ -280,7 +302,8 @@ async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
     # Fan out: one task per platform, each with its own DB connection.
     async def _platform_task(platform: str) -> list[dict]:
         with PostDatabase(config.DB_PATH) as db:
-            return await scrape_platform(platform, cfg, db, healer, progress, should_stop)
+            return await scrape_platform(platform, cfg, db, healer, progress,
+                                         should_stop, on_event)
 
     results = await asyncio.gather(
         *(_platform_task(p) for p in platforms), return_exceptions=True
@@ -301,8 +324,9 @@ async def run(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
 
 
 def run_sync(cfg: ScrapeConfig, progress: Optional[ProgressFn] = None,
-             should_stop: Optional[StopFn] = None) -> dict:
-    return asyncio.run(run(cfg, progress, should_stop))
+             should_stop: Optional[StopFn] = None,
+             on_event: Optional[EventFn] = None) -> dict:
+    return asyncio.run(run(cfg, progress, should_stop, on_event))
 
 
 def _now_iso() -> str:

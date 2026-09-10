@@ -39,15 +39,43 @@ JOBS: dict[str, dict] = {}
 def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
     JOBS[job_id]["status"] = "running"
     lines: list[str] = JOBS[job_id]["log"]
+    # One row per (keyword, platform) so the job page can show what is running
+    # now, what finished, and what each keyword returned — a batch of hundreds
+    # of keywords is unreadable as a flat log.
+    JOBS[job_id].setdefault("keywords_progress", [])
+    JOBS[job_id]["done_count"] = 0
 
     def progress(msg: str) -> None:
         lines.append(msg)
+
+    def on_event(ev: dict) -> None:
+        job = JOBS.get(job_id)
+        if not job:
+            return
+        rows = job.setdefault("keywords_progress", [])
+        kw, platform = ev.get("keyword"), ev.get("platform")
+        if ev.get("event") == "keyword_start":
+            rows.append({"keyword": kw, "platform": platform, "status": "running",
+                         "posts": None, "elapsed_s": None})
+            return
+        # Match the most recent open row for this keyword+platform.
+        for row in reversed(rows):
+            if row["keyword"] == kw and row["platform"] == platform \
+                    and row["status"] == "running":
+                row["status"] = "error" if ev.get("error") else "done"
+                row["posts"] = ev.get("posts")
+                row["accounts"] = ev.get("accounts")
+                row["refreshed"] = ev.get("refreshed")
+                row["elapsed_s"] = ev.get("elapsed_s")
+                row["error"] = ev.get("error")
+                break
+        job["done_count"] = sum(1 for r in rows if r["status"] != "running")
 
     def should_stop() -> bool:
         return JOBS.get(job_id, {}).get("cancel", False)
 
     try:
-        result = run_sync(cfg, progress, should_stop)
+        result = run_sync(cfg, progress, should_stop, on_event)
         # If the user hit stop, mark it 'stopped' rather than 'done'.
         JOBS[job_id]["status"] = "stopped" if JOBS[job_id].get("cancel") else "done"
         JOBS[job_id]["result"] = result
@@ -544,7 +572,10 @@ def create_app() -> Flask:
         JOBS[job_id] = {"id": job_id, "status": "queued", "log": [],
                         "keywords": keywords, "started": time.time(),
                         "batch": {"categories": picked, "keywords": len(keywords),
-                                  "since": config.FRESHNESS_DAYS}}
+                                  "since": config.FRESHNESS_DAYS,
+                                  # Single-category batches can link straight to
+                                  # that category's results page while running.
+                                  "category_id": ids[0] if len(ids) == 1 else None}}
         threading.Thread(target=_run_job, args=(job_id, cfg), daemon=True).start()
         return redirect(url_for("job_status", job_id=job_id))
 

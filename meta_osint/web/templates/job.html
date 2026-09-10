@@ -5,12 +5,45 @@
   <h1>Scrape job <span class="mono" style="font-size:20px; color:var(--fg-2);">{{ job.id }}</span> — <span id="status" class="mono">{{ job.status }}</span></h1>
   <button id="stop-btn" class="btn-danger" style="display:none;">■ Stop scrape</button>
 </div>
-{% if job.keywords %}
+{% if job.batch %}
+<p style="font-size:14px; margin-top:var(--sp-3);">
+  Batch of <strong>{{ job.batch.keywords }}</strong> keyword{{ 's' if job.batch.keywords != 1 }} from
+  {% for c in job.batch.categories %}<span class="kw">{{ c }}</span> {% endfor %}
+  {%- if job.batch.since %} · <span class="muted">posts newer than {{ job.batch.since }}d</span>{% endif %}
+</p>
+{% elif job.keywords %}
 <p style="font-size:14px; margin-top:var(--sp-3);">Queued <strong>{{ job.keywords|length }}</strong> keyword{{ 's' if job.keywords|length != 1 }}:
-  {% for kw in job.keywords %}<span class="kw">{{ kw }}</span> {% endfor %}
+  {% for kw in job.keywords[:24] %}<span class="kw">{{ kw }}</span> {% endfor %}
+  {%- if job.keywords|length > 24 %}<span class="muted micro">+{{ job.keywords|length - 24 }} more</span>{% endif %}
 </p>
 {% endif %}
-<p id="hint" class="muted micro" style="margin:var(--sp-3) 0;">A scrape takes ~30–90s per keyword (search → posts → media → comments), processed one at a time. Live log below:</p>
+
+<div id="progress-wrap" style="margin:var(--sp-4) 0; display:none;">
+  <div style="display:flex; align-items:baseline; gap:var(--sp-3); flex-wrap:wrap;">
+    <strong id="progress-count" class="mono"></strong>
+    <span id="progress-posts" class="muted micro"></span>
+    <a id="results-link" class="ghost micro" style="display:none;" href="#">View results →</a>
+  </div>
+  <div style="height:6px; background:var(--bg-surface-1); border-radius:3px; overflow:hidden; margin-top:6px;">
+    <div id="progress-bar" style="height:100%; width:0%; background:var(--brand-signal); transition:width .4s;"></div>
+  </div>
+  <div style="overflow-x:auto; margin-top:var(--sp-4);">
+    <table id="kw-table">
+      <thead>
+        <tr>
+          <th>Keyword</th>
+          <th style="width:96px;">Platform</th>
+          <th style="width:96px;">Status</th>
+          <th class="num" style="width:70px;">Posts</th>
+          <th class="num" style="width:84px;">Took</th>
+        </tr>
+      </thead>
+      <tbody id="kw-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<p id="hint" class="muted micro" style="margin:var(--sp-3) 0;">A scrape takes ~30–240s per keyword (search → posts → media → comments), processed one at a time per platform. Live log below:</p>
 <pre id="log" class="mono" style="background:var(--bg-surface-1); border:1px solid var(--border-default); border-radius:var(--r-2); padding:var(--sp-4); max-height:480px; overflow:auto; font-size:12px; line-height:1.6;">{% for line in job.log %}{{ line }}
 {% endfor %}</pre>
 <div id="done-actions" style="display:none; margin-top:var(--sp-4); gap:var(--sp-3); align-items:center;">
@@ -35,6 +68,65 @@ stopBtn.addEventListener('click', async () => {
   try { await fetch(`/api/job/${jobId}/stop`, { method: 'POST' }); } catch (e) {}
 });
 
+// Per-keyword progress. The server sends structured rows (not log text), so
+// this only has to format them.
+function fmtSecs(s) {
+  if (s === null || s === undefined) return '';
+  if (s < 60) return Math.round(s) + 's';
+  return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+}
+function renderProgress(j) {
+  const rows = j.keywords_progress || [];
+  if (!rows.length) return;
+  const wrap = document.getElementById('progress-wrap');
+  wrap.style.display = '';
+
+  // Total expected rows = keywords x platforms; fall back to what we have.
+  const planned = (j.keywords || []).length * Math.max(1, new Set(rows.map(r => r.platform)).size);
+  const total = Math.max(planned, rows.length);
+  const done = rows.filter(r => r.status !== 'running').length;
+  const posts = rows.reduce((a, r) => a + (r.posts || 0), 0);
+
+  document.getElementById('progress-count').textContent = done + ' / ' + total + ' keyword passes';
+  document.getElementById('progress-posts').textContent = posts + ' new post' + (posts === 1 ? '' : 's') + ' stored so far';
+  document.getElementById('progress-bar').style.width = Math.round((done / total) * 100) + '%';
+
+  // Newest first: what is running now sits at the top where it is visible.
+  const body = document.getElementById('kw-body');
+  body.innerHTML = '';
+  [...rows].reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    if (r.status === 'running') tr.style.background = 'var(--bg-surface-1)';
+    const statusText = r.status === 'running' ? '⏳ running'
+                     : r.status === 'error' ? '⚠ error' : '✓ done';
+    const cells = [
+      r.keyword,
+      r.platform,
+      statusText,
+      r.status === 'running' ? '' : (r.posts ?? 0),
+      fmtSecs(r.elapsed_s),
+    ];
+    cells.forEach((v, i) => {
+      const td = document.createElement('td');
+      td.textContent = v;
+      if (i >= 3) td.className = 'num';
+      if (i === 2 && r.status === 'error') td.style.color = 'var(--threat-critical)';
+      tr.appendChild(td);
+    });
+    if (r.error) tr.title = r.error;
+    body.appendChild(tr);
+  });
+
+  // Once anything is stored, offer a way through to the data.
+  if (posts > 0) {
+    const link = document.getElementById('results-link');
+    link.style.display = '';
+    link.href = {{ (job.batch.category_id if job.batch and job.batch.category_id else 0)|tojson }}
+      ? '/category/' + {{ (job.batch.category_id if job.batch and job.batch.category_id else 0)|tojson }}
+      : '/posts?sort=scraped&limit=all';
+  }
+}
+
 function setStatusClass(s) {
   statusEl.className = 'mono ' + (s === 'done' ? 'status-done' : (s === 'error' || s === 'stopped') ? 'status-err' : 'status-run');
 }
@@ -49,6 +141,7 @@ async function poll() {
       setStatusClass(j.status);
       logEl.textContent = (j.log || []).join('\n') || 'starting…';
       logEl.scrollTop = logEl.scrollHeight;
+      renderProgress(j);
       // Show the stop button only while running and not already cancelling.
       stopBtn.style.display = running ? 'inline-flex' : 'none';
       if (j.cancel && running) { stopBtn.disabled = true; stopBtn.textContent = '■ stopping…'; }
