@@ -59,7 +59,7 @@ def ytdlp_metadata(url: str) -> Optional[dict]:
                 *_cookies_for(url),
                 url,
             ],
-            capture_output=True, text=True, timeout=40,
+            capture_output=True, text=True, timeout=config.YTDLP_META_TIMEOUT_S,
             encoding="utf-8", errors="replace",
         )
         if result.returncode != 0 or not result.stdout.strip():
@@ -95,7 +95,7 @@ def ytdlp_metadata(url: str) -> Optional[dict]:
 
 def ytdlp_download(url: str) -> Optional[str]:
     """Download the post's video/media via yt-dlp. Returns a repo-relative path."""
-    if not config.DOWNLOAD_MEDIA:
+    if not config.DOWNLOAD_MEDIA or not config.DOWNLOAD_VIDEOS:
         return None
     h = _hash(url)
     media_dir = config.MEDIA_DIR
@@ -116,7 +116,7 @@ def ytdlp_download(url: str) -> Optional[str]:
                 *_cookies_for(url),
                 url,
             ],
-            capture_output=True, text=True, timeout=240,
+            capture_output=True, text=True, timeout=config.YTDLP_DOWNLOAD_TIMEOUT_S,
         )
     except (subprocess.SubprocessError, OSError):
         return None

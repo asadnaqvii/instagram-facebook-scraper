@@ -637,8 +637,20 @@ async def search_keyword(
     with_comments: bool = True,
     progress=None,
     known_urls: set | None = None,
+    on_posts=None,
 ) -> SearchResult:
     result = SearchResult(platform=Platform.facebook, keyword=keyword, started_at=now_iso())
+    _pending: list = []
+
+    def _maybe_flush(force: bool = False) -> None:
+        # Hand collected posts to the DB in batches as they arrive.
+        if not on_posts or not _pending:
+            return
+        every = config.STREAM_SAVE_EVERY
+        if force or (every > 0 and len(_pending) >= every):
+            batch = list(_pending)
+            _pending.clear()
+            on_posts(batch)
     known_urls = known_urls or set()
 
     def _tick(msg: str) -> None:
@@ -858,6 +870,8 @@ async def search_keyword(
                     pass
             post.raw_meta = {**(post.raw_meta or {}), "source": "search"}
             result.posts.append(post)
+            _pending.append(post)
+            _maybe_flush()
             _tick(f"[facebook] {keyword!r}: post {len(result.posts)} "
                   f"(likes={post.likes}, comments={post.comments_count})")
         if filtered_out:
@@ -1053,6 +1067,8 @@ async def search_keyword(
                     continue
             _tick(f"[facebook] {keyword!r}: date backfill: {_got}/{len(undated)} "
                   f"permalink(s) yielded a date")
+
+    _maybe_flush(force=True)
 
     # 4. Record the hashtag form of the keyword.
     if tag:

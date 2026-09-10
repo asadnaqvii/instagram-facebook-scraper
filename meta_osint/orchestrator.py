@@ -62,6 +62,7 @@ async def _run_one(
     cfg: ScrapeConfig,
     progress: Optional[ProgressFn] = None,
     known_urls: set | None = None,
+    on_posts=None,
 ) -> SearchResult:
     """Dispatch a single (platform, keyword) to the right extractor."""
     module = ig if platform == "instagram" else fb
@@ -75,7 +76,7 @@ async def _run_one(
     # default: full keyword search (streams per-post progress, delta-aware)
     return await module.search_keyword(
         page, kw, healer, cfg.max_posts, cfg.with_comments,
-        progress=progress, known_urls=known_urls,
+        progress=progress, known_urls=known_urls, on_posts=on_posts,
     )
 
 
@@ -129,11 +130,39 @@ async def scrape_platform(
             # recover with a fresh page and retry once. This is what stops one
             # keyword's transient failure from silently skipping the rest —
             # exactly the "only Facebook ran" symptom.
+            # Streaming save: hand the scrapers a callback that writes a
+            # batch of posts to the DB the moment they are collected, so a long
+            # run shows data immediately and survives an interruption.
+            streamed: set = set()
+
+            def _flush(posts: list) -> None:
+                if not posts:
+                    return
+                from .models import SearchResult as _SR
+                partial = _SR(platform=Platform(platform), keyword=kw,
+                              started_at=_now_iso(), finished_at=_now_iso())
+                partial.posts = [p for p in posts
+                                 if not (p.post_url and p.post_url in streamed)]
+                if not partial.posts:
+                    return
+                try:
+                    store_search_result(db, partial, healer=healer, run_id=run_id,
+                                        analyze=cfg.analyze)
+                    for p in partial.posts:
+                        if p.post_url:
+                            streamed.add(p.post_url)
+                    _log(progress, f"[{platform}] {kw!r}: saved {len(partial.posts)} "
+                                   f"post(s) to the database ({len(streamed)} so far)")
+                except Exception as e:  # noqa: BLE001
+                    _log(progress, f"[{platform}] {kw!r}: streaming save failed — "
+                                   f"{type(e).__name__}: {str(e)[:70]}")
+
             for attempt in (1, 2):
                 try:
                     if page.is_closed():
                         raise RuntimeError("page was closed")
-                    result = await _run_one(platform, kw, cfg.mode, page, healer, cfg, progress, known_urls)
+                    result = await _run_one(platform, kw, cfg.mode, page, healer, cfg,
+                                            progress, known_urls, on_posts=_flush)
                     break
                 except Exception as e:  # noqa: BLE001 — never let one keyword kill the batch
                     _log(progress, f"[{platform}] {kw!r} attempt {attempt} failed: {str(e)[:120]}")
@@ -156,6 +185,7 @@ async def scrape_platform(
             if result is None:
                 result = SearchResult(platform=Platform(platform), keyword=kw, error="crashed: unknown")
                 result.finished_at = _now_iso()
+            result._streamed_urls = streamed
 
             # Pause between keywords. A real person doesn't fire searches
             # back-to-back at a fixed interval; this also spreads load so a
@@ -167,7 +197,14 @@ async def scrape_platform(
                     _hi *= config.IG_DELAY_MULTIPLIER
                 await asyncio.sleep(_random.uniform(_lo, _hi))
 
+            # Any posts already flushed mid-run are skipped here, so the
+            # final save only writes what streaming did not.
+            already = getattr(result, "_streamed_urls", set())
+            if already:
+                result.posts = [p for p in result.posts
+                                if not (p.post_url and p.post_url in already)]
             counts = store_search_result(db, result, healer=healer, run_id=run_id, analyze=cfg.analyze)
+            counts["posts"] = counts.get("posts", 0) + len(already)
 
             # Apply cheap engagement refresh for re-encountered posts, and link
             # them to this keyword (classification), without re-storing them.
@@ -186,6 +223,17 @@ async def scrape_platform(
                 if p.post_url:
                     known_urls.add(p.post_url)
 
+            # finish_run counts result.posts, but streaming already removed the
+            # flushed ones — restore the true total so the run record and the
+            # summary line report what was actually stored.
+            _streamed_n = len(getattr(result, "_streamed_urls", set()) or ())
+            if _streamed_n:
+                class _Counted(list):
+                    def __init__(self, seq, extra):
+                        super().__init__(seq); self._extra = extra
+                    def __len__(self):
+                        return super().__len__() + self._extra
+                result.posts = _Counted(result.posts, _streamed_n)
             db.finish_run(run_id, result)
             summary = {**result.summary(), "stored": counts, "refreshed": refreshed_n}
             summaries.append(summary)

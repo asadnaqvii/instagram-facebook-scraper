@@ -212,7 +212,9 @@ RATE_LIMIT_BACKOFF_S = float(os.getenv("RATE_LIMIT_BACKOFF_S", "90"))
 RATE_LIMIT_MAX_BACKOFF_S = float(os.getenv("RATE_LIMIT_MAX_BACKOFF_S", "600"))
 
 # Per-post / per-comment collection caps (safety valves).
-MAX_MEDIA_PER_POST = int(os.getenv("MAX_MEDIA_PER_POST", "20"))
+# Images downloaded per post. A search sweep does not need every image in a
+# carousel; 20 was the single biggest per-post cost (measured 23s/post).
+MAX_MEDIA_PER_POST = int(os.getenv("MAX_MEDIA_PER_POST", "4"))
 MAX_COMMENTS_PER_POST = int(os.getenv("MAX_COMMENTS_PER_POST", "50"))
 MAX_ACCOUNTS_PER_SEARCH = int(os.getenv("MAX_ACCOUNTS_PER_SEARCH", "20"))
 MAX_HASHTAGS_PER_SEARCH = int(os.getenv("MAX_HASHTAGS_PER_SEARCH", "20"))
@@ -220,6 +222,19 @@ MAX_HASHTAGS_PER_SEARCH = int(os.getenv("MAX_HASHTAGS_PER_SEARCH", "20"))
 # yt-dlp media download ceiling.
 MAX_MEDIA_FILESIZE = os.getenv("MAX_MEDIA_FILESIZE", "80M")
 DOWNLOAD_MEDIA = os.getenv("DOWNLOAD_MEDIA", "true").lower() == "true"
+# Downloading the actual VIDEO file is the slowest single step (a 240s timeout
+# per post). Metadata — caption, likes, views, upload date — still comes from
+# yt-dlp either way, so a keyword sweep gets everything it needs with this off.
+# Turn on when you specifically want the video files.
+DOWNLOAD_VIDEOS = os.getenv("DOWNLOAD_VIDEOS", "false").lower() == "true"
+# Subprocess ceilings for yt-dlp (seconds).
+YTDLP_META_TIMEOUT_S = int(os.getenv("YTDLP_META_TIMEOUT_S", "25"))
+YTDLP_DOWNLOAD_TIMEOUT_S = int(os.getenv("YTDLP_DOWNLOAD_TIMEOUT_S", "90"))
+
+# Write posts to the database in batches AS THEY ARE COLLECTED rather than once
+# at the end of a keyword. A long run then shows data immediately and survives
+# an interruption. 0 disables streaming (single save at the end).
+STREAM_SAVE_EVERY = int(os.getenv("STREAM_SAVE_EVERY", "5"))
 
 
 # ── LLM (Ollama) ─────────────────────────────────────────────────────

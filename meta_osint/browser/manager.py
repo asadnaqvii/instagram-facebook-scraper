@@ -199,14 +199,36 @@ async def human_mouse(page: Page) -> None:
 
 
 async def scroll_page(page: Page, times: int, platform: str | None = None) -> None:
-    """Scroll like a person: variable distance, easing, overshoot, re-reads."""
+    """Scroll like a person: variable distance, easing, overshoot, re-reads.
+
+    Real scrolling is not a repeated fixed jump. Each flick differs in size and
+    speed, people occasionally flick back up, sometimes nudge only slightly, and
+    pause irregularly to read. A uniform scroll pattern is one of the easiest
+    automation signals to spot, so every dimension here is randomised."""
     for i in range(times):
         base = config.SCROLL_INCREMENT_PX
-        # Distance varies a lot between flicks.
-        dist = int(base * random.uniform(0.55, 1.5))
+        # Flick style: mostly normal, sometimes a small nudge, occasionally a
+        # long sweep — the spread a real hand produces.
+        roll = random.random()
+        if roll < 0.18:
+            dist = int(base * random.uniform(0.20, 0.45))     # small nudge
+        elif roll > 0.88:
+            dist = int(base * random.uniform(1.6, 2.4))       # long sweep
+        else:
+            dist = int(base * random.uniform(0.55, 1.5))      # normal flick
+        # Every so often, scroll UP a little before continuing down.
+        if random.random() < 0.07:
+            try:
+                await page.evaluate(
+                    "(y) => window.scrollBy({top: -y, behavior: 'auto'})",
+                    int(base * random.uniform(0.15, 0.5)),
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(random.uniform(0.4, 1.6))
 
         # Split the flick into a few eased steps rather than one jump.
-        steps = random.randint(2, 5)
+        steps = random.randint(2, 7)
         for sidx in range(steps):
             frac = (sidx + 1) / steps
             # ease-out: fast start, slow finish (a real flick decelerates)
@@ -219,7 +241,7 @@ async def scroll_page(page: Page, times: int, platform: str | None = None) -> No
                 )
             except Exception:
                 pass
-            await asyncio.sleep(random.uniform(0.04, 0.16))
+            await asyncio.sleep(random.uniform(0.03, 0.22))
 
         await human_mouse(page)
         await human_delay("scroll", platform)

@@ -512,12 +512,24 @@ async def search_keyword(
     with_comments: bool = True,
     progress=None,
     known_urls: set | None = None,
+    on_posts=None,
 ) -> SearchResult:
     """Full keyword search: accounts + hashtags + places + hashtag-feed posts.
 
     `known_urls` are post URLs already in the DB — they get a cheap engagement
     refresh instead of full re-extraction (delta scraping)."""
     result = SearchResult(platform=Platform.instagram, keyword=keyword, started_at=now_iso())
+    _pending: list = []
+
+    def _maybe_flush(force: bool = False) -> None:
+        # Hand collected posts to the DB in batches as they arrive.
+        if not on_posts or not _pending:
+            return
+        every = config.STREAM_SAVE_EVERY
+        if force or (every > 0 and len(_pending) >= every):
+            batch = list(_pending)
+            _pending.clear()
+            on_posts(batch)
 
     def _tick(msg: str) -> None:
         if progress:
@@ -621,6 +633,8 @@ async def search_keyword(
                     post = await extract_post(page, link, healer, with_comments=with_comments)
                     if post:
                         result.posts.append(post)
+                        _pending.append(post)
+                        _maybe_flush()
                         _tick(f"[instagram] {keyword!r}: NEW post {len(result.posts)} "
                               f"(likes={post.likes}, {len(post.comments)} comments)")
                     else:
@@ -734,6 +748,8 @@ async def search_keyword(
             _tick(f"[instagram] {keyword!r}: dropped {_stale} post(s) older than "
                   f"{config.FRESHNESS_DAYS} day(s)")
         result.posts = _kept
+
+    _maybe_flush(force=True)
 
     result.finished_at = now_iso()
     return result
