@@ -14,6 +14,12 @@ Examples:
     # Scrape a hashtag feed
     python -m meta_osint.main scrape --mode hashtag -k nuclear -p facebook
 
+    # Category batch runs (the cron entry point)
+    python -m meta_osint.main categories --seed          # load the built-in taxonomy
+    python -m meta_osint.main categories                 # list them with yields
+    python -m meta_osint.main batch --dry-run            # preview the keyword order
+    python -m meta_osint.main batch -c e p --since 1 -n 20   # daily run of two categories
+
     # DB stats / environment check / dashboard
     python -m meta_osint.main stats
     python -m meta_osint.main diagnose
@@ -103,6 +109,138 @@ def _cmd_scrape(args) -> None:
         print(line)
     print(f"\n  DB totals: {result['db_stats']}")
     print(f"  Database: {config.DB_PATH}\n")
+
+
+def _cmd_categories(args) -> None:
+    """List / seed / enable / disable keyword categories."""
+    from meta_osint.database.db import PostDatabase
+    from meta_osint.database.seed_categories import load_seed_categories
+
+    with PostDatabase(config.DB_PATH) as db:
+        if args.seed:
+            stats = load_seed_categories(db, overwrite=args.overwrite)
+            print(f"\nSeeded categories: {stats['created']} created, "
+                  f"{stats['updated']} updated, {stats['skipped']} left alone "
+                  f"({stats['keywords']} keywords bound)")
+            if stats["skipped"] and not args.overwrite:
+                print("  (existing categories kept as-is; use --overwrite to reset them)")
+        if args.enable or args.disable:
+            for code in (args.enable or []):
+                _set_enabled_by_code(db, code, True)
+            for code in (args.disable or []):
+                _set_enabled_by_code(db, code, False)
+
+        rows = db.get_category_stats()
+        if not rows:
+            print("\nNo categories yet. Seed the built-in set with:")
+            print("  python -m meta_osint.main categories --seed\n")
+            return
+        print(f"\nCategories ({len(rows)})")
+        print("-" * 78)
+        print(f"  {'code':<5} {'wt':<4} {'name':<44} {'kws':>4} {'posts':>6}  on")
+        for r in rows:
+            mark = "yes" if r["enabled"] else " no"
+            print(f"  {(r['code'] or ''):<5} {(r['weight'] or ''):<4} "
+                  f"{r['name'][:44]:<44} {r['keyword_count']:>4} {r['posts']:>6}  {mark}")
+        enabled = [r for r in rows if r["enabled"]]
+        total_kw = len(db.batch_keywords())
+        print("-" * 78)
+        print(f"  {len(enabled)} enabled -> {total_kw} unique keywords in a full batch")
+        if args.show:
+            for r in rows:
+                if args.show not in (r["code"], "all"):
+                    continue
+                kws = db.get_category_keywords(r["id"])
+                print(f"\n  [{r['code']}] {r['name']} ({r['weight']}) - {len(kws)} keywords:")
+                for kw in kws:
+                    print(f"      {kw}")
+        print()
+
+
+def _set_enabled_by_code(db, code: str, enabled: bool) -> None:
+    match = [c for c in db.get_categories() if c.get("code") == code or c["name"] == code]
+    if not match:
+        print(f"  ! no category with code/name {code!r}", file=sys.stderr)
+        return
+    db.set_category_enabled(match[0]["id"], enabled)
+    print(f"  {'enabled' if enabled else 'disabled'}: [{match[0].get('code')}] {match[0]['name']}")
+
+
+def _cmd_batch(args) -> None:
+    """Run every keyword in the selected categories, newest-first.
+
+    This is the cron entry point: it expands categories into their keywords
+    (W3 first, de-duplicated) and hands them to the ordinary scrape pipeline.
+    """
+    from meta_osint.database.db import PostDatabase
+
+    with PostDatabase(config.DB_PATH) as db:
+        cat_ids = None
+        if args.category:
+            wanted, missing = [], []
+            for token in args.category:
+                hit = [c for c in db.get_categories()
+                       if c.get("code") == token or c["name"] == token]
+                (wanted.append(hit[0]["id"]) if hit else missing.append(token))
+            if missing:
+                print(f"Unknown category code/name: {', '.join(missing)}", file=sys.stderr)
+                print("List them with: python -m meta_osint.main categories", file=sys.stderr)
+                sys.exit(2)
+            cat_ids = wanted
+        keywords = db.batch_keywords(cat_ids, enabled_only=not args.include_disabled)
+        cats = db.get_categories(enabled_only=not args.include_disabled)
+        if cat_ids:
+            cats = [c for c in cats if c["id"] in set(cat_ids)]
+
+    if not keywords:
+        print("No keywords to run. Seed or enable a category first:", file=sys.stderr)
+        print("  python -m meta_osint.main categories --seed", file=sys.stderr)
+        sys.exit(2)
+
+    if args.limit:
+        keywords = keywords[: args.limit]
+
+    if args.dry_run:
+        print(f"\nBatch would run {len(keywords)} keyword(s) from "
+              f"{len(cats)} category(ies), in this order:\n")
+        for i, kw in enumerate(keywords, 1):
+            print(f"  {i:>3}. {kw}")
+        est = len(keywords) * len(args.platform.split(",") if args.platform else config.PLATFORMS)
+        print(f"\n  {est} keyword-platform passes. At ~{args.max_posts} posts each "
+              f"that is up to {est * args.max_posts} posts.\n")
+        return
+
+    # Batch runs are for periodic collection, so default to newest-first.
+    config.SORT_MODE = args.sort or "recent"
+    if args.since:
+        config.FRESHNESS_DAYS = args.since
+
+    platforms = args.platform.split(",") if args.platform else list(config.PLATFORMS)
+    cfg = ScrapeConfig(
+        keywords=keywords,
+        platforms=platforms,
+        mode="search",
+        max_posts=args.max_posts,
+        with_comments=not args.no_comments,
+        analyze=args.analyze,
+    )
+    print(f"\n{'='*64}")
+    print(f"  meta_osint BATCH - {len(cats)} category(ies), {len(keywords)} keywords")
+    for c in cats:
+        print(f"    [{c.get('code')}] {c['weight']}  {c['name'][:46]} ({c['keyword_count']} kws)")
+    print(f"  platforms={','.join(platforms)}  sort={config.SORT_MODE}"
+          + (f"  since={config.FRESHNESS_DAYS}d" if config.FRESHNESS_DAYS else ""))
+    print(f"{'='*64}\n")
+
+    result = run_sync(cfg, progress=lambda m: print(m, flush=True))
+
+    print(f"\n{'='*64}\n  BATCH DONE")
+    total = 0
+    for s in result["summaries"]:
+        if s.get("stored"):
+            total += s["stored"]["posts"]
+    print(f"  {total} new posts across {len(keywords)} keywords")
+    print(f"  DB totals: {result['db_stats']}\n")
 
 
 def _cmd_stats(args) -> None:
@@ -196,6 +334,37 @@ def build_parser() -> argparse.ArgumentParser:
     add_scrape_args(sp_scrape)
     sp_scrape.add_argument("--mode", choices=["search", "profile", "hashtag"], default="search")
     sp_scrape.set_defaults(func=_cmd_scrape)
+
+    sp_cats = sub.add_parser("categories", help="List / seed / enable keyword categories")
+    sp_cats.add_argument("--seed", action="store_true",
+                         help="Load the built-in strategic taxonomy (16 categories, 335 keywords)")
+    sp_cats.add_argument("--overwrite", action="store_true",
+                         help="With --seed: reset existing seed categories to the shipped keyword lists")
+    sp_cats.add_argument("--enable", nargs="*", metavar="CODE", help="Enable categories by code or name")
+    sp_cats.add_argument("--disable", nargs="*", metavar="CODE", help="Disable categories by code or name")
+    sp_cats.add_argument("--show", metavar="CODE", help="Print the keywords of one category (or 'all')")
+    sp_cats.set_defaults(func=_cmd_categories)
+
+    sp_batch = sub.add_parser(
+        "batch", help="Run all keywords in one or more categories (the cron entry point)")
+    sp_batch.add_argument("-c", "--category", nargs="*", metavar="CODE",
+                          help="Category codes/names to run (default: every enabled category)")
+    sp_batch.add_argument("-p", "--platform", help="Comma-separated platforms (default: both)")
+    sp_batch.add_argument("-n", "--max-posts", type=int, default=15,
+                          help="Max posts per keyword per platform (default 15)")
+    sp_batch.add_argument("--sort", choices=["recent", "top"], default="recent",
+                          help="Collection order (default: recent - newest first)")
+    sp_batch.add_argument("--since", metavar="DAYS", type=int,
+                          help="Only keep posts newer than DAYS (e.g. --since 1 for a daily cron)")
+    sp_batch.add_argument("--limit", type=int, metavar="N",
+                          help="Run only the first N keywords (useful for a short cron window)")
+    sp_batch.add_argument("--include-disabled", action="store_true",
+                          help="Also run categories marked disabled")
+    sp_batch.add_argument("--no-comments", action="store_true", help="Skip comment extraction (faster)")
+    sp_batch.add_argument("--analyze", action="store_true", help="Enable LLM content analysis")
+    sp_batch.add_argument("--dry-run", action="store_true",
+                          help="Print the keyword list and exit without scraping")
+    sp_batch.set_defaults(func=_cmd_batch)
 
     sp_stats = sub.add_parser("stats", help="Show database statistics")
     sp_stats.set_defaults(func=_cmd_stats)

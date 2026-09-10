@@ -182,6 +182,32 @@ CREATE TABLE IF NOT EXISTS keywords (
     UNIQUE KEY uq_keywords_keyword (keyword)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── categories (grouping of search keywords for batch runs) ─────────────────
+--  Sits ON TOP of `keywords`: every keyword is still an ordinary keywords row,
+--  so result_links / search_runs joins are unchanged. A category owns many
+--  keywords and a keyword may belong to several categories.
+--  `weight` (W1/W2/W3) is the batch priority — W3 categories run first.
+CREATE TABLE IF NOT EXISTS categories (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    code        VARCHAR(24),
+    name        VARCHAR(384) NOT NULL,
+    weight      VARCHAR(24)  DEFAULT 'W2',
+    enabled     TINYINT      DEFAULT 1,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_categories_code (code),
+    UNIQUE KEY uq_categories_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS category_keywords (
+    category_id BIGINT NOT NULL,
+    keyword_id  BIGINT NOT NULL,
+    PRIMARY KEY (category_id, keyword_id),
+    KEY idx_catkw_keyword (keyword_id),
+    CONSTRAINT fk_catkw_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE,
+    CONSTRAINT fk_catkw_keyword  FOREIGN KEY (keyword_id)  REFERENCES keywords(id)  ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ── strategic_keywords (the AI analysis lens) ───────────────────────────────
 --  Distinct from search `keywords`: these define what "strategically relevant"
 --  means when the LLM scores each post.

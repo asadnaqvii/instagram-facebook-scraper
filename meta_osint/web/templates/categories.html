@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block title %}Categories · meta_osint{% endblock %}
+{% block body %}
+
+{# Seconds -> "4m 12s" / "1h 06m". Durations here span seconds to hours. #}
+{% macro dur(s) %}
+  {%- if s is none -%}—
+  {%- elif s < 60 -%}{{ '%.0f'|format(s) }}s
+  {%- elif s < 3600 -%}{{ (s // 60)|int }}m {{ (s % 60)|int }}s
+  {%- else -%}{{ (s // 3600)|int }}h {{ ((s % 3600) // 60)|int }}m
+  {%- endif -%}
+{% endmacro %}
+
+<div style="display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-5); flex-wrap:wrap; margin-bottom:var(--sp-5);">
+  <h1 style="margin:0;">Categories</h1>
+  <p class="muted micro" style="margin:0;">
+    {{ cats|length }} categories · {{ batch_total }} unique keywords in a full batch
+  </p>
+</div>
+
+{% if error %}
+<p style="background:var(--threat-critical-tint); border:1px solid var(--threat-critical); color:#ff9b95; padding:10px 14px; border-radius:var(--r-2); max-width:720px;">⚠️ {{ error }}</p>
+{% endif %}
+{% if notice %}
+<p style="background:var(--bg-2); border:1px solid var(--brand-signal); padding:10px 14px; border-radius:var(--r-2); max-width:720px;">{{ notice }}</p>
+{% endif %}
+
+{% if not cats %}
+<div class="card" style="max-width:660px;">
+  <h2 style="margin-top:0;">No categories yet</h2>
+  <p class="muted">Load the built-in strategic taxonomy — 16 categories covering nuclear
+     doctrine, missile tests, arms control, BMD, drones and more (335 keywords).
+     You can edit any of them afterwards.</p>
+  <form method="post" action="{{ url_for('categories_seed') }}">
+    <button type="submit">Load built-in taxonomy</button>
+  </form>
+</div>
+{% else %}
+
+{# ── Last batch timing ─────────────────────────────────────── #}
+{% if last_batch %}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Most recent run</h2>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:var(--sp-5);">
+    <div><label>Elapsed</label><p style="font-size:22px; margin:0;">{{ dur(last_batch.span_s) }}</p></div>
+    <div><label>Keywords</label><p style="font-size:22px; margin:0;">{{ last_batch.keywords }}</p></div>
+    <div><label>Posts</label><p style="font-size:22px; margin:0;">{{ last_batch.posts }}</p></div>
+    <div><label>Avg / keyword</label><p style="font-size:22px; margin:0;">{{ dur(last_batch.avg_run_s) }}</p></div>
+    <div><label>Started</label><p style="font-size:14px; margin:0;" class="muted">{{ (last_batch.started_at or '')[:16] }}</p></div>
+  </div>
+  <p class="muted micro" style="margin:var(--sp-4) 0 0;">
+    Elapsed is wall-clock across the whole batch. Facebook and Instagram run at the
+    same time, so it is less than the sum of the per-keyword times.
+  </p>
+</div>
+{% endif %}
+
+{# ── Batch runner ────────────────────────────────────────── #}
+<form method="post" action="{{ url_for('categories_batch') }}" class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Run a batch</h2>
+  <p class="muted micro" style="margin-top:0;">
+    Every keyword in the ticked categories is scraped newest-first, highest weight
+    (W3) first. Keywords shared between categories run once. Facebook and Instagram
+    run at the same time; within each, keywords go one at a time with human pauses.
+  </p>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:8px var(--sp-5); margin:var(--sp-4) 0;">
+    {% for c in cats %}
+    <label style="display:flex; align-items:baseline; gap:8px; margin:0; text-transform:none; font-family:var(--font-body); font-size:14px; color:var(--fg-1);">
+      <input type="checkbox" name="category" value="{{ c.id }}" {{ 'checked' if c.enabled }}>
+      <span>
+        <span class="kw">{{ c.weight }}</span>
+        {{ c.name }}
+        <span class="muted micro">({{ c.keyword_count }})</span>
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex; gap:var(--sp-5); flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label>Platforms</label>
+      <div style="display:flex; gap:var(--sp-4);">
+        {% for p in platforms %}
+        <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:var(--font-body); font-size:14px; color:var(--fg-1);">
+          <input type="checkbox" name="platforms" value="{{ p }}" checked> {{ p }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div>
+      <label>Max posts / keyword</label>
+      <input type="number" name="max_posts" value="15" min="1" max="200" style="width:110px;">
+    </div>
+    <div>
+      <label>Only posts newer than</label>
+      <select name="since" style="width:150px;">
+        <option value="">any age</option>
+        <option value="1">1 day</option>
+        <option value="3">3 days</option>
+        <option value="7" selected>7 days</option>
+        <option value="30">30 days</option>
+      </select>
+    </div>
+    <div>
+      <label>Keyword limit</label>
+      <input type="number" name="limit" placeholder="all" min="1" style="width:110px;">
+    </div>
+  </div>
+
+  <div style="margin-top:var(--sp-3); display:flex; gap:var(--sp-5);">
+    <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:var(--font-body); font-size:14px; color:var(--fg-1);"><input type="checkbox" name="comments"> Extract comments</label>
+    <label style="display:inline-flex; align-items:center; gap:6px; margin:0; text-transform:none; font-family:var(--font-body); font-size:14px; color:var(--fg-1);"><input type="checkbox" name="analyze"> LLM analysis (slower)</label>
+  </div>
+
+  <div style="margin-top:var(--sp-6);"><button type="submit">▶ Start batch</button></div>
+  <p class="muted micro" style="margin-top:var(--sp-4);">
+    A full {{ batch_total }}-keyword batch is a long run — start with a few categories or a
+    keyword limit. For a scheduled run use the CLI:
+    <span class="kw">python -m meta_osint.main batch --since 1 -n 20</span>
+  </p>
+</form>
+
+{# ── Category table ──────────────────────────────────────── #}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <div style="display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-4); flex-wrap:wrap;">
+    <h2 style="margin:0;">All categories</h2>
+    <button type="button" class="ghost micro" onclick="newCategory()">+ New category</button>
+  </div>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:52px;">Code</th>
+        <th style="width:56px;">Weight</th>
+        <th>Category</th>
+        <th class="num" style="width:76px;">Keywords</th>
+        <th class="num" style="width:70px;">Posts</th>
+        <th class="num" style="width:76px;">Runs</th>
+        <th class="num" style="width:92px;">Avg time</th>
+        <th style="width:150px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in cats %}
+      <tr{% if not c.enabled %} style="opacity:.5;"{% endif %}>
+        <td><span class="kw">{{ c.code or '—' }}</span></td>
+        <td><span class="kw">{{ c.weight }}</span></td>
+        <td>
+          <details>
+            <summary style="cursor:pointer;">{{ c.name }}</summary>
+            <p class="muted micro" style="margin:8px 0 0; line-height:1.7;">
+              {% for kw in c.keywords %}<span class="kw" style="margin-right:4px;">{{ kw }}</span>{% endfor %}
+            </p>
+          </details>
+        </td>
+        <td class="num">{{ c.keyword_count }}</td>
+        <td class="num">{{ c.posts }}</td>
+        <td class="num">{{ c.timing.runs if c.timing else 0 }}</td>
+        <td class="num">{{ dur(c.timing.avg_s) if c.timing else '—' }}</td>
+        <td style="white-space:nowrap;">
+          <button type="button" class="ghost micro edit-btn"
+                  data-id="{{ c.id }}" data-code="{{ c.code or '' }}"
+                  data-name="{{ c.name }}" data-weight="{{ c.weight }}"
+                  data-keywords="{{ c.keywords|join('\n') }}">Edit</button>
+          <form method="post" action="{{ url_for('categories_toggle') }}" style="display:inline;">
+            <input type="hidden" name="id" value="{{ c.id }}">
+            <input type="hidden" name="enabled" value="{{ 0 if c.enabled else 1 }}">
+            <button type="submit" class="ghost micro">{{ 'Disable' if c.enabled else 'Enable' }}</button>
+          </form>
+          <form method="post" action="{{ url_for('categories_batch') }}" style="display:inline;">
+            <input type="hidden" name="category" value="{{ c.id }}">
+            <input type="hidden" name="max_posts" value="15">
+            <input type="hidden" name="since" value="7">
+            <button type="submit" class="ghost micro">Run</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <form method="post" action="{{ url_for('categories_seed') }}" style="margin-top:var(--sp-5);">
+    <input type="hidden" name="overwrite" value="1">
+    <button type="submit" class="ghost micro"
+            onclick="return confirm('Reset every built-in category back to its shipped keyword list? Your edits to those categories will be lost.');">
+      Reset built-in categories to defaults
+    </button>
+  </form>
+</div>
+
+{# ── Editor ─────────────────────────────────────────────── #}
+<div class="card" id="editor" style="display:none; margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;" id="editor-title">New category</h2>
+  <form method="post" action="{{ url_for('categories_save') }}">
+    <input type="hidden" name="id" id="f-id" value="">
+    <div style="display:flex; gap:var(--sp-5); flex-wrap:wrap;">
+      <div style="flex:1 1 280px;">
+        <label>Name</label>
+        <input type="text" name="name" id="f-name" required style="width:100%;"
+               placeholder="e.g. Hypersonic Systems">
+      </div>
+      <div>
+        <label>Code</label>
+        <input type="text" name="code" id="f-code" maxlength="24" style="width:90px;"
+               placeholder="opt.">
+      </div>
+      <div>
+        <label>Weight</label>
+        <select name="weight" id="f-weight" style="width:150px;">
+          <option value="W3">W3 — runs first</option>
+          <option value="W2" selected>W2 — normal</option>
+          <option value="W1">W1 — runs last</option>
+        </select>
+      </div>
+    </div>
+    <label style="margin-top:var(--sp-4);">Keywords (one per line, or comma-separated)</label>
+    <textarea name="keywords" id="f-keywords" rows="9" style="width:100%;" required
+              placeholder="hypersonic glide vehicle&#10;boost-glide&#10;scramjet"></textarea>
+    <p class="muted micro" style="margin-top:6px;">
+      Keywords are shared with manual searches — adding one that already exists links
+      the same keyword, keeping its collected posts and history.
+    </p>
+    <div style="margin-top:var(--sp-5); display:flex; gap:var(--sp-4); align-items:center; flex-wrap:wrap;">
+      <button type="submit">Save category</button>
+      <button type="button" class="ghost micro" onclick="closeEditor()">Cancel</button>
+      <span style="flex:1;"></span>
+      <button type="submit" class="ghost micro" id="f-delete"
+              formaction="{{ url_for('categories_delete') }}"
+              style="display:none; color:var(--threat-critical);"
+              onclick="return confirm('Delete this category? Its keywords and their collected posts are kept.');">
+        Delete category
+      </button>
+    </div>
+  </form>
+</div>
+
+{# ── Run history ────────────────────────────────────────── #}
+{% if runs %}
+<div class="card">
+  <h2 style="margin-top:0;">Recent runs</h2>
+  <p class="muted micro" style="margin-top:0;">
+    One row per keyword per platform, newest first — how long each took and what it returned.
+  </p>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Keyword</th>
+        <th style="width:100px;">Platform</th>
+        <th style="width:150px;">Started</th>
+        <th class="num" style="width:90px;">Took</th>
+        <th class="num" style="width:70px;">Posts</th>
+        <th style="width:130px;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td>{{ r.keyword }}</td>
+        <td class="muted">{{ r.platform }}</td>
+        <td class="muted micro">{{ (r.started_at or '')[:16] }}</td>
+        <td class="num">{{ dur(r.duration_s) }}</td>
+        <td class="num">{{ r.posts_found }}</td>
+        <td class="micro">
+          {%- if r.error %}<span style="color:var(--threat-critical);">{{ r.error[:28] }}</span>
+          {%- elif not r.finished_at %}<span class="muted">unfinished</span>
+          {%- else %}<span class="muted">ok</span>{% endif -%}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+<script>
+// The editor is one form reused for create and edit; these fill or clear it.
+// Values come from data-* attributes rather than inline onclick arguments:
+// category names and keyword lists contain quotes and newlines, which silently
+// truncate an onclick attribute.
+document.querySelectorAll('.edit-btn').forEach(function (b) {
+  b.addEventListener('click', function () {
+    document.getElementById('editor-title').textContent = 'Edit — ' + b.dataset.name;
+    document.getElementById('f-id').value = b.dataset.id;
+    document.getElementById('f-name').value = b.dataset.name;
+    document.getElementById('f-code').value = b.dataset.code;
+    document.getElementById('f-weight').value = b.dataset.weight;
+    document.getElementById('f-keywords').value = b.dataset.keywords;
+    document.getElementById('f-delete').style.display = '';
+    openEditor();
+  });
+});
+function newCategory() {
+  document.getElementById('editor-title').textContent = 'New category';
+  document.getElementById('f-id').value = '';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-code').value = '';
+  document.getElementById('f-weight').value = 'W2';
+  document.getElementById('f-keywords').value = '';
+  document.getElementById('f-delete').style.display = 'none';
+  openEditor();
+}
+function openEditor() {
+  const el = document.getElementById('editor');
+  el.style.display = '';
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  document.getElementById('f-name').focus();
+}
+function closeEditor() {
+  document.getElementById('editor').style.display = 'none';
+}
+</script>
+{% endif %}
+{% endblock %}

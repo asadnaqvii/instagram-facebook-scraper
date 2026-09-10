@@ -340,6 +340,155 @@ def create_app() -> Flask:
 
     # ── Strategic Intelligence (AI enrichment) ───────────────────────
 
+    # ── categories (keyword groups + batch runs) ──────────────────
+
+    @app.route("/categories")
+    def categories():
+        with PostDatabase(config.DB_PATH) as db:
+            cats = db.get_category_stats()
+            timing = db.get_category_timing()
+            for c in cats:
+                c["keywords"] = db.get_category_keywords(c["id"])
+                c["timing"] = timing.get(c["id"])
+            batch_total = len(db.batch_keywords())
+            last_batch = db.get_last_batch_timing()
+            runs = db.get_run_history(limit=40)
+        return render_template(
+            "categories.html", cats=cats, batch_total=batch_total,
+            platforms=config.PLATFORMS, path=request.path,
+            last_batch=last_batch, runs=runs,
+            notice=request.args.get("notice"), error=request.args.get("error"),
+        )
+
+    @app.route("/categories/save", methods=["POST"])
+    def categories_save():
+        """Create or update one category. Keywords arrive as free text, one per
+        line or comma-separated — the same shape as the scrape box."""
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            return redirect(url_for("categories", error="A category needs a name."))
+        raw = request.form.get("keywords", "")
+        keywords = [k.strip() for k in raw.replace(",", "\n").splitlines() if k.strip()]
+        if not keywords:
+            return redirect(url_for(
+                "categories", error=f"{name}: add at least one keyword."))
+        weight = request.form.get("weight", "W2")
+        if weight not in ("W1", "W2", "W3"):
+            weight = "W2"
+        code = (request.form.get("code") or "").strip() or None
+        cat_id = request.form.get("id", "").strip()
+        try:
+            with PostDatabase(config.DB_PATH) as db:
+                if cat_id.isdigit():
+                    # Editing: keep the row identity, rewrite its fields.
+                    existing = db.get_category(int(cat_id))
+                    if not existing:
+                        return redirect(url_for("categories", error="That category no longer exists."))
+                    conn = db.connect()
+                    conn.execute(
+                        "UPDATE categories SET code=?, name=?, weight=? WHERE id=?",
+                        (code, name, weight, int(cat_id)),
+                    )
+                    conn.commit()
+                    db.upsert_category(name, code=code, weight=weight,
+                                       enabled=existing["enabled"], keywords=keywords)
+                    msg = f"Updated {name} ({len(keywords)} keywords)."
+                else:
+                    db.upsert_category(name, code=code, weight=weight,
+                                       enabled=True, keywords=keywords)
+                    msg = f"Saved {name} ({len(keywords)} keywords)."
+        except Exception as e:  # noqa: BLE001 — surface the reason, don't 500
+            return redirect(url_for("categories", error=f"Could not save {name}: {e}"))
+        return redirect(url_for("categories", notice=msg))
+
+    @app.route("/categories/delete", methods=["POST"])
+    def categories_delete():
+        cat_id = request.form.get("id", "").strip()
+        if not cat_id.isdigit():
+            return redirect(url_for("categories", error="No category selected."))
+        with PostDatabase(config.DB_PATH) as db:
+            cat = db.get_category(int(cat_id))
+            db.delete_category(int(cat_id))
+        name = cat["name"] if cat else "Category"
+        return redirect(url_for(
+            "categories",
+            notice=f"Deleted {name}. Its keywords and their collected posts were kept."))
+
+    @app.route("/api/runs")
+    def api_runs():
+        """Recent run history with durations (for the third-party app)."""
+        with PostDatabase(config.DB_PATH) as db:
+            runs = db.get_run_history(limit=int(request.args.get("limit", 60)))
+            last = db.get_last_batch_timing()
+        return jsonify({"runs": runs, "last_batch": last, "count": len(runs)})
+
+    @app.route("/categories/seed", methods=["POST"])
+    def categories_seed():
+        from meta_osint.database.seed_categories import load_seed_categories
+
+        overwrite = request.form.get("overwrite") == "1"
+        with PostDatabase(config.DB_PATH) as db:
+            stats = load_seed_categories(db, overwrite=overwrite)
+        notice = (f"Seeded: {stats['created']} created, {stats['updated']} updated, "
+                  f"{stats['skipped']} left alone ({stats['keywords']} keywords bound).")
+        return redirect(url_for("categories", notice=notice))
+
+    @app.route("/categories/toggle", methods=["POST"])
+    def categories_toggle():
+        with PostDatabase(config.DB_PATH) as db:
+            db.set_category_enabled(int(request.form["id"]),
+                                    request.form.get("enabled") == "1")
+        return redirect(url_for("categories"))
+
+    @app.route("/categories/batch", methods=["POST"])
+    def categories_batch():
+        """Expand the ticked categories into keywords and start a scrape job.
+
+        Batch runs are for periodic collection, so they always sort newest-first
+        (SORT_MODE=recent); the optional `since` drops anything older."""
+        ids = [int(i) for i in request.form.getlist("category") if i.strip().isdigit()]
+        with PostDatabase(config.DB_PATH) as db:
+            keywords = db.batch_keywords(ids or None, enabled_only=not ids)
+            cats = db.get_categories()
+        if not keywords:
+            return redirect(url_for(
+                "categories", error="Pick at least one category with keywords in it."))
+
+        limit = request.form.get("limit", "").strip()
+        if limit.isdigit() and int(limit) > 0:
+            keywords = keywords[: int(limit)]
+
+        # Batch = periodic collection: newest-first, optionally date-bounded.
+        config.SORT_MODE = "recent"
+        since = request.form.get("since", "").strip()
+        config.FRESHNESS_DAYS = int(since) if since.isdigit() else 0
+
+        cfg = ScrapeConfig(
+            keywords=keywords,
+            platforms=request.form.getlist("platforms") or list(config.PLATFORMS),
+            mode="search",
+            max_posts=int(request.form.get("max_posts", 15) or 15),
+            with_comments=request.form.get("comments") == "on",
+            analyze=request.form.get("analyze") == "on",
+        )
+        picked = [c["name"] for c in cats if not ids or c["id"] in set(ids)]
+        job_id = uuid.uuid4().hex[:8]
+        JOBS[job_id] = {"id": job_id, "status": "queued", "log": [],
+                        "keywords": keywords, "started": time.time(),
+                        "batch": {"categories": picked, "keywords": len(keywords),
+                                  "since": config.FRESHNESS_DAYS}}
+        threading.Thread(target=_run_job, args=(job_id, cfg), daemon=True).start()
+        return redirect(url_for("job_status", job_id=job_id))
+
+    @app.route("/api/categories")
+    def api_categories():
+        """Category list with per-category yield (for the third-party app)."""
+        with PostDatabase(config.DB_PATH) as db:
+            cats = db.get_category_stats()
+            for c in cats:
+                c["keywords"] = db.get_category_keywords(c["id"])
+        return jsonify({"categories": cats, "count": len(cats)})
+
     @app.route("/strategic")
     def strategic():
         from collections import Counter

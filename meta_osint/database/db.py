@@ -368,6 +368,31 @@ class PostDatabase:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- Categories group search keywords for batch runs. A category owns
+            -- many keywords; a keyword may belong to several categories. This
+            -- sits ON TOP of `keywords` — every keyword is still a normal row
+            -- there, so existing joins (result_links, search_runs) are
+            -- unaffected.
+            --   code   : short stable handle ('a'..'p' in the seed set)
+            --   weight : W1/W2/W3 priority — W3 runs first in a batch
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE,
+                name TEXT NOT NULL UNIQUE,
+                weight TEXT DEFAULT 'W2',
+                enabled INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS category_keywords (
+                category_id INTEGER NOT NULL,
+                keyword_id INTEGER NOT NULL,
+                PRIMARY KEY (category_id, keyword_id),
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE,
+                FOREIGN KEY (keyword_id) REFERENCES keywords(id) ON DELETE CASCADE
+            );
+
             -- Strategic keywords: the analysis lens for AI enrichment. Distinct
             -- from search `keywords` (which drove scraping) — these define what
             -- "strategically relevant" means when scoring posts.
@@ -409,6 +434,7 @@ class PostDatabase:
             CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id);
             CREATE INDEX IF NOT EXISTS idx_media_post ON media(post_id);
             CREATE INDEX IF NOT EXISTS idx_result_links_kw ON result_links(keyword_id);
+            CREATE INDEX IF NOT EXISTS idx_catkw_keyword ON category_keywords(keyword_id);
             """
         )
         self._migrate()
@@ -1022,6 +1048,293 @@ class PostDatabase:
             "accounts": self.get_accounts(keyword=keyword, limit=200),
             "hashtags": self.get_hashtags(keyword=keyword, limit=200),
             "places": self.get_places(keyword=keyword, limit=200),
+        }
+
+    # ── categories (grouping of search keywords for batch runs) ──────
+
+    # Weight is the batch priority: W3 first, then W2, W1, then anything else.
+    _WEIGHT_ORDER = {"W3": 0, "W2": 1, "W1": 2}
+
+    def get_categories(self, enabled_only: bool = False) -> list[dict]:
+        """Every category with its keywords.
+
+        keyword_count is what the category defines; use get_category_stats()
+        for what those keywords have actually collected."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT c.id, c.code, c.name, c.weight, c.enabled,
+                      COUNT(DISTINCT ck.keyword_id) AS keyword_count
+               FROM categories c
+               LEFT JOIN category_keywords ck ON ck.category_id = c.id
+               """ + ("WHERE c.enabled = 1 " if enabled_only else "") + """
+               GROUP BY c.id, c.code, c.name, c.weight, c.enabled"""
+        )
+        cats = []
+        for r in rows:
+            row = dict(r)
+            row["enabled"] = bool(_num(row.get("enabled")) or 0)
+            row["keyword_count"] = _num(row.get("keyword_count")) or 0
+            row["keywords"] = self.get_category_keywords(row["id"])
+            cats.append(row)
+        # Order in Python: W3/W2/W1 is a priority, not an alphabetical sort,
+        # and expressing that in portable SQL costs a CASE in every backend.
+        cats.sort(key=lambda c: (self._WEIGHT_ORDER.get((c.get("weight") or "").upper(), 3),
+                                 (c.get("code") or ""), c["name"]))
+        return cats
+
+    def get_category_keywords(self, category_id: int) -> list[str]:
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT k.keyword FROM category_keywords ck
+               JOIN keywords k ON k.id = ck.keyword_id
+               WHERE ck.category_id = ? ORDER BY k.keyword""",
+            (category_id,),
+        )
+        return [r["keyword"] for r in rows]
+
+    def get_category(self, category_id: int) -> Optional[dict]:
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT id, code, name, weight, enabled FROM categories WHERE id = ?",
+            (category_id,),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["enabled"] = bool(_num(out.get("enabled")) or 0)
+        out["keywords"] = self.get_category_keywords(category_id)
+        return out
+
+    def upsert_category(self, name: str, *, code: Optional[str] = None,
+                        weight: str = "W2", enabled: bool = True,
+                        keywords: Optional[list] = None,
+                        replace_keywords: bool = True) -> int:
+        """Create or update a category and (re)bind its keywords.
+
+        Keywords are created in the ordinary `keywords` table via
+        get_or_create_keyword, so a keyword shared with a manual search is the
+        SAME row - its history and result_links carry over rather than being
+        duplicated under the category."""
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("category name is required")
+        conn = self.connect()
+        row = None
+        if code:
+            row = conn.execute("SELECT id FROM categories WHERE code = ?", (code,)).fetchone()
+        if not row:
+            row = conn.execute("SELECT id FROM categories WHERE name = ?", (name,)).fetchone()
+        if row:
+            cat_id = row["id"]
+            conn.execute(
+                "UPDATE categories SET code=?, name=?, weight=?, enabled=? WHERE id=?",
+                (code, name, weight, 1 if enabled else 0, cat_id),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO categories (code, name, weight, enabled) VALUES (?, ?, ?, ?)",
+                (code, name, weight, 1 if enabled else 0),
+            )
+            cat_id = cur.lastrowid
+        if keywords is not None:
+            if replace_keywords:
+                conn.execute("DELETE FROM category_keywords WHERE category_id = ?", (cat_id,))
+            for kw in keywords:
+                kw = (kw or "").strip()
+                if not kw:
+                    continue
+                kw_id = self.get_or_create_keyword(kw)
+                conn.execute(
+                    "INSERT OR IGNORE INTO category_keywords (category_id, keyword_id) VALUES (?, ?)",
+                    (cat_id, kw_id),
+                )
+        conn.commit()
+        return cat_id
+
+    def set_category_enabled(self, category_id: int, enabled: bool) -> None:
+        conn = self.connect()
+        conn.execute("UPDATE categories SET enabled=? WHERE id=?",
+                     (1 if enabled else 0, category_id))
+        conn.commit()
+
+    def delete_category(self, category_id: int) -> None:
+        """Drop the category and its bindings. The keywords themselves stay -
+        they may be used by other categories or by manual searches, and their
+        collected posts must not lose their link."""
+        conn = self.connect()
+        conn.execute("DELETE FROM category_keywords WHERE category_id = ?", (category_id,))
+        conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+        conn.commit()
+
+    def batch_keywords(self, category_ids: Optional[list] = None,
+                       enabled_only: bool = True) -> list:
+        """Keywords to run for a batch, ordered by category weight (W3 first).
+
+        De-duplicated across categories: a keyword in two categories is
+        scraped ONCE per run, keeping its highest-priority position."""
+        cats = self.get_categories(enabled_only=enabled_only)
+        if category_ids:
+            wanted = set(category_ids)
+            cats = [c for c in cats if c["id"] in wanted]
+        out = []
+        seen = set()
+        for c in cats:
+            for kw in c["keywords"]:
+                low = kw.lower()
+                if low not in seen:
+                    seen.add(low)
+                    out.append(kw)
+        return out
+
+    def get_category_stats(self) -> list[dict]:
+        """Per-category yield: posts collected via any of its keywords."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT c.id, c.code, c.name, c.weight, c.enabled,
+                      COUNT(DISTINCT ck.keyword_id) AS keyword_count,
+                      COUNT(DISTINCT CASE WHEN rl.entity_type='post'
+                                          THEN rl.entity_id END) AS posts
+               FROM categories c
+               LEFT JOIN category_keywords ck ON ck.category_id = c.id
+               LEFT JOIN result_links rl ON rl.keyword_id = ck.keyword_id
+               GROUP BY c.id, c.code, c.name, c.weight, c.enabled"""
+        )
+        out = []
+        for r in rows:
+            row = dict(r)
+            row["enabled"] = bool(_num(row.get("enabled")) or 0)
+            for k in ("keyword_count", "posts"):
+                row[k] = _num(row.get(k)) or 0
+            out.append(row)
+        out.sort(key=lambda c: (self._WEIGHT_ORDER.get((c.get("weight") or "").upper(), 3),
+                                (c.get("code") or ""), c["name"]))
+        return out
+
+    # ── run timing ────────────────────────────────────
+
+    @staticmethod
+    def _duration_s(started, finished):
+        """Seconds between two stored timestamps, or None.
+
+        Values arrive as ISO strings on SQLite and datetimes on MySQL, so both
+        are normalised here rather than at every call site."""
+        if not started or not finished:
+            return None
+        vals = []
+        for v in (started, finished):
+            if isinstance(v, str):
+                try:
+                    vals.append(datetime.fromisoformat(v.replace("Z", "+00:00")))
+                except ValueError:
+                    return None
+            elif isinstance(v, datetime):
+                vals.append(v)
+            else:
+                return None
+        delta = (vals[1] - vals[0]).total_seconds()
+        # A negative or absurd span means a clock change or an interrupted run.
+        return delta if 0 <= delta < 86400 else None
+
+    def get_run_history(self, limit: int = 60, keyword: Optional[str] = None,
+                        category_id: Optional[int] = None) -> list[dict]:
+        """Recent per-keyword runs with how long each took."""
+        conn = self.connect()
+        sql = """SELECT sr.id, k.keyword, sr.platform, sr.started_at, sr.finished_at,
+                        sr.posts_found, sr.accounts_found, sr.error
+                 FROM search_runs sr JOIN keywords k ON k.id = sr.keyword_id"""
+        params: list = []
+        where = []
+        if keyword:
+            where.append("k.keyword = ?")
+            params.append(keyword)
+        if category_id:
+            where.append("sr.keyword_id IN (SELECT keyword_id FROM category_keywords "
+                         "WHERE category_id = ?)")
+            params.append(category_id)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY sr.id DESC LIMIT ?"
+        params.append(limit)
+        out = []
+        for r in conn.execute(sql, tuple(params)):
+            row = dict(r)
+            row["duration_s"] = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            row["started_at"] = _dt_to_str(row.get("started_at"))
+            row["finished_at"] = _dt_to_str(row.get("finished_at"))
+            row["posts_found"] = _num(row.get("posts_found")) or 0
+            out.append(row)
+        return out
+
+    def get_category_timing(self) -> dict:
+        """Per-category timing rollup: runs, total/avg seconds, posts.
+
+        Keyed by category id. Built in Python from the raw run rows because the
+        duration arithmetic differs between SQLite (ISO text) and MySQL
+        (DATETIME), and doing it here keeps one implementation for both."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT ck.category_id AS cid, sr.started_at, sr.finished_at,
+                      sr.posts_found
+               FROM search_runs sr
+               JOIN category_keywords ck ON ck.keyword_id = sr.keyword_id"""
+        )
+        agg: dict = {}
+        for r in rows:
+            row = dict(r)
+            cid = row["cid"]
+            a = agg.setdefault(cid, {"runs": 0, "total_s": 0.0, "timed_runs": 0, "posts": 0})
+            a["runs"] += 1
+            a["posts"] += _num(row.get("posts_found")) or 0
+            dur = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            if dur is not None:
+                a["total_s"] += dur
+                a["timed_runs"] += 1
+        for a in agg.values():
+            a["avg_s"] = (a["total_s"] / a["timed_runs"]) if a["timed_runs"] else None
+        return agg
+
+    def get_last_batch_timing(self, window_minutes: int = 180) -> Optional[dict]:
+        """Wall-clock span of the most recent burst of runs.
+
+        Runs are grouped by gap: anything starting within `window_minutes` of
+        the previous run counts as the same batch. Facebook and Instagram run
+        concurrently, so the span is the real elapsed time, not the sum."""
+        rows = self.get_run_history(limit=400)
+        rows = [r for r in rows if r.get("started_at")]
+        if not rows:
+            return None
+        def _parse(v):
+            try:
+                return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        batch = []
+        prev = None
+        for r in rows:          # newest first
+            ts = _parse(r["started_at"])
+            if ts is None:
+                continue
+            if prev is not None and (prev - ts).total_seconds() > window_minutes * 60:
+                break
+            batch.append(r)
+            prev = ts
+        if not batch:
+            return None
+        starts = [_parse(r["started_at"]) for r in batch if _parse(r["started_at"])]
+        ends = [_parse(r["finished_at"]) for r in batch if r.get("finished_at")
+                and _parse(r["finished_at"])]
+        if not starts:
+            return None
+        span = (max(ends) - min(starts)).total_seconds() if ends else None
+        durs = [r["duration_s"] for r in batch if r.get("duration_s") is not None]
+        return {
+            "runs": len(batch),
+            "keywords": len({r["keyword"] for r in batch}),
+            "posts": sum(r["posts_found"] for r in batch),
+            "span_s": span,
+            "avg_run_s": (sum(durs) / len(durs)) if durs else None,
+            "started_at": _dt_to_str(min(starts)),
+            "finished_at": _dt_to_str(max(ends)) if ends else None,
         }
 
     # ── strategic keywords (AI analysis lens) ────────────────────────
