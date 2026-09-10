@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% import "_logos.html" as logos %}
+{% import "_relevancy.html" as rel %}
+{% block title %}{{ cat.name }} · Categories{% endblock %}
+{% block body %}
+
+{% macro dur(s) %}
+  {%- if s is none -%}—
+  {%- elif s < 60 -%}{{ '%.0f'|format(s) }}s
+  {%- elif s < 3600 -%}{{ (s // 60)|int }}m {{ (s % 60)|int }}s
+  {%- else -%}{{ (s // 3600)|int }}h {{ ((s % 3600) // 60)|int }}m
+  {%- endif -%}
+{% endmacro %}
+
+<p class="muted micro" style="margin-bottom:var(--sp-2);">
+  <a href="{{ url_for('categories') }}">← Categories</a>
+</p>
+<div style="display:flex; align-items:baseline; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-5);">
+  <h1 style="margin:0;">{{ cat.name }}</h1>
+  <span class="kw">{{ cat.weight }}</span>
+  {% if cat.code %}<span class="kw">{{ cat.code }}</span>{% endif %}
+  {% if not cat.enabled %}<span class="muted micro">disabled</span>{% endif %}
+</div>
+
+{# ── Summary ─────────────────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:var(--sp-5);">
+    <div><label>Posts collected</label><p style="font-size:22px; margin:0;">{{ total }}</p></div>
+    <div><label>Keywords</label><p style="font-size:22px; margin:0;">{{ cat.keywords|length }}</p></div>
+    <div><label>Runs</label><p style="font-size:22px; margin:0;">{{ timing.runs if timing else 0 }}</p></div>
+    <div><label>Avg / run</label><p style="font-size:22px; margin:0;">{{ dur(timing.avg_s) if timing else '—' }}</p></div>
+    <div><label>Total time</label><p style="font-size:22px; margin:0;">{{ dur(timing.total_s) if timing else '—' }}</p></div>
+  </div>
+  <div style="margin-top:var(--sp-5); display:flex; gap:var(--sp-4); flex-wrap:wrap;">
+    <form method="post" action="{{ url_for('categories_batch') }}" style="display:inline;">
+      <input type="hidden" name="category" value="{{ cat.id }}">
+      <input type="hidden" name="max_posts" value="15">
+      <input type="hidden" name="since" value="7">
+      <button type="submit">▶ Run this category</button>
+    </form>
+    <a class="ghost micro" href="{{ url_for('posts', category=cat.id, limit='all') }}">Open in Posts view</a>
+    <a class="ghost micro" href="{{ url_for('api_category_detail', category_id=cat.id) }}">JSON</a>
+  </div>
+</div>
+
+{# ── Per-keyword yield ───────────────────────────────────────────────── #}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Yield by keyword</h2>
+  <p class="muted micro" style="margin-top:0;">
+    Which keywords in this category are actually producing. One with runs but no
+    posts is a candidate to reword or drop.
+  </p>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Keyword</th>
+        <th class="num" style="width:76px;">Posts</th>
+        <th class="num" style="width:70px;">Runs</th>
+        <th class="num" style="width:92px;">Avg time</th>
+        <th style="width:150px;">Last run</th>
+        <th style="width:70px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for k in kw_stats %}
+      <tr{% if k.runs and not k.posts %} style="opacity:.55;"{% endif %}>
+        <td>{{ k.keyword }}</td>
+        <td class="num">{{ k.posts }}</td>
+        <td class="num">{{ k.runs }}</td>
+        <td class="num">{{ dur(k.avg_s) }}</td>
+        <td class="muted micro">{{ (k.last_run or '—')[:16] }}</td>
+        <td>
+          {% if k.posts %}
+          <a class="ghost micro" href="{{ url_for('posts', keyword=k.keyword, limit='all') }}">View</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+{# ── Runs ────────────────────────────────────────────────────────────── #}
+{% if runs %}
+<div class="card" style="margin-bottom:var(--sp-6);">
+  <h2 style="margin-top:0;">Runs in this category</h2>
+  <div style="overflow-x:auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Keyword</th>
+        <th style="width:100px;">Platform</th>
+        <th style="width:150px;">Started</th>
+        <th class="num" style="width:90px;">Took</th>
+        <th class="num" style="width:70px;">Posts</th>
+        <th style="width:120px;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td>{{ r.keyword }}</td>
+        <td class="muted">{{ r.platform }}</td>
+        <td class="muted micro">{{ (r.started_at or '')[:16] }}</td>
+        <td class="num">{{ dur(r.duration_s) }}</td>
+        <td class="num">{{ r.posts_found }}</td>
+        <td class="micro">
+          {%- if r.error %}<span style="color:var(--threat-critical);">{{ r.error[:24] }}</span>
+          {%- elif not r.finished_at %}<span class="muted">unfinished</span>
+          {%- else %}<span class="muted">ok</span>{% endif -%}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{# ── Posts ───────────────────────────────────────────────────────────── #}
+<div style="display:flex; align-items:baseline; gap:var(--sp-3); flex-wrap:wrap; margin-bottom:var(--sp-4);">
+  <h2 style="margin:0;">Posts</h2>
+  <span class="micro">
+    {%- if total > posts|length -%}showing {{ posts|length }} of {{ total }}
+    {%- else -%}{{ posts|length }} result{{ '' if posts|length == 1 else 's' }}{%- endif -%}
+  </span>
+  {% if total > posts|length %}
+  <a class="ghost micro" href="{{ url_for('category_detail', category_id=cat.id, sort=sort, since=since, limit='all') }}">Show all {{ total }}</a>
+  {% endif %}
+</div>
+
+<form method="get" style="margin-bottom:var(--sp-6); display:flex; gap:var(--sp-2); flex-wrap:wrap;">
+  <select name="sort">
+    <option value="latest" {{ 'selected' if sort=='latest' }}>Latest (best available time)</option>
+    <option value="posted" {{ 'selected' if sort=='posted' }}>Newest posted</option>
+    <option value="scraped" {{ 'selected' if sort=='scraped' }}>Recently scraped</option>
+    <option value="relevancy" {{ 'selected' if sort=='relevancy' }}>Most relevant</option>
+  </select>
+  <select name="since">
+    <option value="" {{ 'selected' if not since }}>Any time</option>
+    <option value="24h" {{ 'selected' if since=='24h' }}>Last 24 hours</option>
+    <option value="7d" {{ 'selected' if since=='7d' }}>Last 7 days</option>
+    <option value="30d" {{ 'selected' if since=='30d' }}>Last 30 days</option>
+  </select>
+  {% if limit is none %}<input type="hidden" name="limit" value="all">{% endif %}
+  <button>Filter</button>
+</form>
+
+{% if posts %}
+<div class="feed-grid">
+  {% for p in posts %}
+  <div class="post-card">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
+      <span class="badge {{ p.platform }}">{{ logos.platform(p.platform, 13) }} {{ p.platform }}</span>
+      {% if p.author_username %}<span class="mono muted">@{{ p.author_username }}</span>{% endif %}
+      <span style="margin-left:auto;">{{ rel.badge(p.relevancy, p.relevancy_source, p.relevancy_rationale) }}</span>
+    </div>
+    {% if p.media_urls %}
+    <div style="display:flex; gap:6px; overflow-x:auto; margin-bottom:8px;">
+      {% for m in p.media_urls[:4] %}<img src="{{ m }}" alt="" style="height:120px; border-radius:var(--r-1);">{% endfor %}
+    </div>
+    {% endif %}
+    <p style="font-size:14px; margin:0 0 8px;">{{ (p.text or '')[:320] }}{% if (p.text or '')|length > 320 %}…{% endif %}</p>
+    <p class="muted micro" style="margin:0 0 8px;">
+      {{ (p.timestamp or p.scraped_at or '')[:16] }}
+      {%- if p.likes %} · {{ p.likes }} likes{% endif %}
+      {%- if p.comments_count %} · {{ p.comments_count }} comments{% endif %}
+    </p>
+    {% if p.post_url %}<a href="{{ p.post_url }}" target="_blank" rel="noopener" style="font-size:13px; font-weight:600; font-family:var(--font-mono);">🔗 open post on {{ p.platform }} →</a>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No posts collected for this category yet. Run it to start collecting.</p>
+{% endif %}
+{% endblock %}

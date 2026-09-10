@@ -164,6 +164,16 @@ def _run_enrich_job(job_id: str, rescore: bool = False) -> None:
         lines.append(f"Error: {e}")
 
 
+def _parse_limit(raw: str, default: int = 200) -> int | None:
+    """?limit=all -> None (no cap); ?limit=N -> N; anything else -> default."""
+    raw = (raw or "").strip().lower()
+    if raw in ("all", "0", "-1"):
+        return None
+    if raw.isdigit() and int(raw) > 0:
+        return min(int(raw), 5000)
+    return default
+
+
 def _attach_media_urls(posts: list[dict]) -> list[dict]:
     """Add browser-servable URLs for each downloaded media file + thumbnail."""
     for p in posts:
@@ -293,23 +303,31 @@ def create_app() -> Flask:
     def posts():
         platform = request.args.get("platform") or None
         keyword = request.args.get("keyword") or None
+        cat_arg = request.args.get("category") or ""
+        category_id = int(cat_arg) if cat_arg.isdigit() else None
         sort = request.args.get("sort") or "latest"
         since = request.args.get("since") or ""
         since_days = parse_since_days(since)
+        limit = _parse_limit(request.args.get("limit", ""))
         # 'relevancy' is a display-time derived value, so fetch by a real sort
         # then re-order in Python.
         db_sort = "latest" if sort == "relevancy" else sort
         with PostDatabase(config.DB_PATH) as db:
             ai_scores = db.get_strategic_scores()
             rows = _attach_relevancy(_attach_media_urls(
-                db.get_posts(platform=platform, keyword=keyword, sort=db_sort, limit=100,
-                             since_days=since_days)),
+                db.get_posts(platform=platform, keyword=keyword, sort=db_sort,
+                             limit=limit, since_days=since_days,
+                             category_id=category_id)),
                 ai_scores)
             all_keywords = [k["keyword"] for k in db.get_keywords()]
+            category = db.get_category(category_id) if category_id else None
+            total = db.count_posts(platform=platform, keyword=keyword,
+                                   since_days=since_days, category_id=category_id)
         if sort == "relevancy":
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("posts.html", posts=rows, platform=platform, keyword=keyword,
-                               sort=sort, since=since, all_keywords=all_keywords)
+                               sort=sort, since=since, all_keywords=all_keywords,
+                               category=category, total=total, limit=limit)
 
     @app.route("/keyword/<path:keyword>")
     def keyword_detail(keyword):
@@ -421,6 +439,45 @@ def create_app() -> Flask:
             runs = db.get_run_history(limit=int(request.args.get("limit", 60)))
             last = db.get_last_batch_timing()
         return jsonify({"runs": runs, "last_batch": last, "count": len(runs)})
+
+    @app.route("/category/<int:category_id>")
+    def category_detail(category_id):
+        """What one category has actually collected: per-keyword yield and posts."""
+        sort = request.args.get("sort") or "latest"
+        since = request.args.get("since") or ""
+        since_days = parse_since_days(since)
+        limit = _parse_limit(request.args.get("limit", ""))
+        db_sort = "latest" if sort == "relevancy" else sort
+        with PostDatabase(config.DB_PATH) as db:
+            cat = db.get_category(category_id)
+            if not cat:
+                abort(404)
+            kw_stats = db.get_category_keyword_stats(category_id)
+            ai_scores = db.get_strategic_scores()
+            rows = _attach_relevancy(_attach_media_urls(
+                db.get_posts(category_id=category_id, sort=db_sort, limit=limit,
+                             since_days=since_days)), ai_scores)
+            total = db.count_posts(category_id=category_id, since_days=since_days)
+            runs = db.get_run_history(limit=40, category_id=category_id)
+            timing = db.get_category_timing().get(category_id)
+        if sort == "relevancy":
+            rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
+        return render_template("category_detail.html", cat=cat, kw_stats=kw_stats,
+                               posts=rows, runs=runs, timing=timing,
+                               sort=sort, since=since, path=request.path,
+                               total=total, limit=limit)
+
+    @app.route("/api/category/<int:category_id>")
+    def api_category_detail(category_id):
+        with PostDatabase(config.DB_PATH) as db:
+            cat = db.get_category(category_id)
+            if not cat:
+                return jsonify({"error": "not found"}), 404
+            cat["keyword_stats"] = db.get_category_keyword_stats(category_id)
+            cat["runs"] = db.get_run_history(limit=40, category_id=category_id)
+            cat["timing"] = db.get_category_timing().get(category_id)
+            cat["posts"] = db.get_posts(category_id=category_id, limit=None)
+        return jsonify(cat)
 
     @app.route("/categories/seed", methods=["POST"])
     def categories_seed():

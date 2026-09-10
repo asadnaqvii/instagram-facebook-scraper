@@ -6,8 +6,18 @@
 <div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
   <h1>Posts</h1>
   {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
+  {% if category %}<a href="{{ url_for('category_detail', category_id=category.id) }}" class="kw">{{ category.name }}</a>{% endif %}
   {% if platform %}<span class="badge {{ platform }}">{{ logos.platform(platform, 14) }} {{ platform }}</span>{% endif %}
-  <span class="micro">{{ posts|length }} results</span>
+  <span class="micro">
+    {%- if total is defined and total > posts|length -%}
+      showing {{ posts|length }} of {{ total }}
+    {%- else -%}
+      {{ posts|length }} result{{ '' if posts|length == 1 else 's' }}
+    {%- endif -%}
+  </span>
+  {% if total is defined and total > posts|length %}
+  <a class="ghost micro" href="{{ url_for('posts', platform=platform, keyword=keyword, category=(category.id if category), sort=sort, since=since, limit='all') }}">Show all {{ total }}</a>
+  {% endif %}
 </div>
 
 <form method="get" style="margin-bottom:var(--sp-6); display:flex; gap:var(--sp-2); flex-wrap:wrap;">
@@ -33,6 +43,8 @@
     <option value="30d" {{ 'selected' if since=='30d' }}>Last 30 days</option>
     <option value="90d" {{ 'selected' if since=='90d' }}>Last 90 days</option>
   </select>
+  {% if limit is not defined or limit is none %}<input type="hidden" name="limit" value="all">{% endif %}
+  {% if category %}<input type="hidden" name="category" value="{{ category.id }}">{% endif %}
   <button>Filter</button>
 </form>
 

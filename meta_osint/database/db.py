@@ -866,10 +866,11 @@ class PostDatabase:
         platform: Optional[str] = None,
         keyword: Optional[str] = None,
         author: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
         sort: str = "latest",
         since_days: Optional[int] = None,
+        category_id: Optional[int] = None,
     ) -> list[dict]:
         """Fetch posts.
 
@@ -887,12 +888,20 @@ class PostDatabase:
         conn = self.connect()
         sql = ["SELECT DISTINCT p.* FROM posts p"]
         params: list[Any] = []
-        if keyword:
+        # A category filter joins the same way a keyword does, but matches ANY
+        # keyword bound to the category. DISTINCT keeps a post that several of
+        # its keywords surfaced from appearing more than once.
+        if keyword or category_id:
             sql.append(
                 "JOIN result_links rl ON rl.entity_type='post' AND rl.entity_id=p.id "
                 "JOIN keywords k ON k.id=rl.keyword_id"
             )
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
         where = []
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
         if platform:
             where.append("p.platform=?")
             params.append(platform)
@@ -921,10 +930,63 @@ class PostDatabase:
             order = "p.created_at DESC"
         else:  # latest — coalesce posted time with scrape time
             order = "COALESCE(p.timestamp, p.scraped_at, p.created_at) DESC"
-        sql.append(f"ORDER BY {order} LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
+        sql.append(f"ORDER BY {order}")
+        # limit=None means "everything" - the posts page offers an explicit
+        # Show all, and a category export needs the full set.
+        if limit is not None:
+            sql.append("LIMIT ? OFFSET ?")
+            params.extend([limit, offset])
+        elif offset:
+            # No portable "no limit" clause exists, so use each backend's max.
+            sql.append("LIMIT -1 OFFSET ?" if self.backend != "mysql"
+                       else "LIMIT 18446744073709551615 OFFSET ?")
+            params.append(offset)
         rows = conn.execute(" ".join(sql), params).fetchall()
         return [self._hydrate_post(dict(r)) for r in rows]
+
+    def count_posts(
+        self,
+        platform: Optional[str] = None,
+        keyword: Optional[str] = None,
+        author: Optional[str] = None,
+        since_days: Optional[int] = None,
+        category_id: Optional[int] = None,
+    ) -> int:
+        """How many posts match the same filters get_posts() would apply.
+
+        Kept deliberately parallel to get_posts so the page can say "showing
+        200 of 437" instead of silently truncating."""
+        conn = self.connect()
+        sql = ["SELECT COUNT(DISTINCT p.id) AS n FROM posts p"]
+        params: list[Any] = []
+        if keyword or category_id:
+            sql.append(
+                "JOIN result_links rl ON rl.entity_type='post' AND rl.entity_id=p.id "
+                "JOIN keywords k ON k.id=rl.keyword_id"
+            )
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
+        where = []
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
+        if platform:
+            where.append("p.platform=?")
+            params.append(platform)
+        if author:
+            where.append("p.author_username=?")
+            params.append(author)
+        if keyword:
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if since_days:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+            where.append("(COALESCE(p.timestamp, p.scraped_at) >= ?)")
+            params.append(cutoff)
+        if where:
+            sql.append("WHERE " + " AND ".join(where))
+        row = conn.execute(" ".join(sql), tuple(params)).fetchone()
+        return _num(row["n"]) or 0 if row else 0
 
     def get_post(self, post_id: int) -> Optional[dict]:
         """One hydrated post by primary key, or None. Used by the API's
@@ -1208,6 +1270,66 @@ class PostDatabase:
             out.append(row)
         out.sort(key=lambda c: (self._WEIGHT_ORDER.get((c.get("weight") or "").upper(), 3),
                                 (c.get("code") or ""), c["name"]))
+        return out
+
+    def get_category_keyword_stats(self, category_id: int) -> list[dict]:
+        """Per-keyword yield inside one category: posts, runs, last run, avg time.
+
+        This is what answers "which keywords in this category are actually
+        working" — a keyword with runs but no posts is one to reword or drop."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT k.id, k.keyword,
+                      COUNT(DISTINCT CASE WHEN rl.entity_type='post'
+                                          THEN rl.entity_id END) AS posts
+               FROM category_keywords ck
+               JOIN keywords k ON k.id = ck.keyword_id
+               LEFT JOIN result_links rl ON rl.keyword_id = k.id
+               WHERE ck.category_id = ?
+               GROUP BY k.id, k.keyword""",
+            (category_id,),
+        )
+        stats = {}
+        for r in rows:
+            row = dict(r)
+            row["posts"] = _num(row.get("posts")) or 0
+            row["runs"] = 0
+            row["last_run"] = None
+            row["avg_s"] = None
+            stats[row["id"]] = row
+
+        # Run counts/timings come from a second pass so the duration handling
+        # stays in one place (_duration_s) for both backends.
+        runs = conn.execute(
+            """SELECT sr.keyword_id AS kid, sr.started_at, sr.finished_at
+               FROM search_runs sr
+               JOIN category_keywords ck ON ck.keyword_id = sr.keyword_id
+               WHERE ck.category_id = ?""",
+            (category_id,),
+        )
+        acc = {}
+        for r in runs:
+            row = dict(r)
+            kid = row["kid"]
+            if kid not in stats:
+                continue
+            a = acc.setdefault(kid, {"n": 0, "total": 0.0, "timed": 0, "last": None})
+            a["n"] += 1
+            started = _dt_to_str(row.get("started_at"))
+            if started and (a["last"] is None or started > a["last"]):
+                a["last"] = started
+            dur = self._duration_s(row.get("started_at"), row.get("finished_at"))
+            if dur is not None:
+                a["total"] += dur
+                a["timed"] += 1
+        for kid, a in acc.items():
+            stats[kid]["runs"] = a["n"]
+            stats[kid]["last_run"] = a["last"]
+            stats[kid]["avg_s"] = (a["total"] / a["timed"]) if a["timed"] else None
+
+        out = list(stats.values())
+        # Most productive first; never-run keywords sink to the bottom.
+        out.sort(key=lambda k: (-k["posts"], -k["runs"], k["keyword"].lower()))
         return out
 
     # ── run timing ────────────────────────────────────

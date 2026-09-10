@@ -148,17 +148,22 @@
         <td><span class="kw">{{ c.weight }}</span></td>
         <td>
           <details>
-            <summary style="cursor:pointer;">{{ c.name }}</summary>
+            <summary style="cursor:pointer;"><a href="{{ url_for('category_detail', category_id=c.id) }}">{{ c.name }}</a></summary>
             <p class="muted micro" style="margin:8px 0 0; line-height:1.7;">
               {% for kw in c.keywords %}<span class="kw" style="margin-right:4px;">{{ kw }}</span>{% endfor %}
             </p>
           </details>
         </td>
         <td class="num">{{ c.keyword_count }}</td>
-        <td class="num">{{ c.posts }}</td>
+        <td class="num">
+          {%- if c.posts -%}
+          <a href="{{ url_for('category_detail', category_id=c.id) }}">{{ c.posts }}</a>
+          {%- else -%}0{%- endif -%}
+        </td>
         <td class="num">{{ c.timing.runs if c.timing else 0 }}</td>
         <td class="num">{{ dur(c.timing.avg_s) if c.timing else '—' }}</td>
         <td style="white-space:nowrap;">
+          <a class="ghost micro" href="{{ url_for('category_detail', category_id=c.id) }}">Results</a>
           <button type="button" class="ghost micro edit-btn"
                   data-id="{{ c.id }}" data-code="{{ c.code or '' }}"
                   data-name="{{ c.name }}" data-weight="{{ c.weight }}"
