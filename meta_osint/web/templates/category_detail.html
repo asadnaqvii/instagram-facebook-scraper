@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% import "_logos.html" as logos %}
 {% import "_relevancy.html" as rel %}
+{% import "_listing.html" as listing %}
 {% block title %}{{ cat.name }} · Categories{% endblock %}
 {% block body %}
 
@@ -81,6 +82,34 @@
   </table>
   </div>
 </div>
+
+{# ── Who and what this category surfaced ─────────────────── #}
+{% if top_accounts and top_accounts[0].collected_posts or top_hashtags and top_hashtags[0].uses %}
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:var(--sp-5); margin-bottom:var(--sp-6);">
+  {% if top_accounts and top_accounts[0].collected_posts %}
+  <div class="card">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-4);">
+      <h2 style="margin:0;">Top accounts</h2>
+      <a class="ghost micro" href="{{ url_for('accounts', category=cat.id) }}">All {{ n_accounts }} →</a>
+    </div>
+    <div style="margin-top:var(--sp-4);">
+      {{ listing.bars(top_accounts, 'username', 'collected_posts', 'Posts collected from each account') }}
+    </div>
+  </div>
+  {% endif %}
+  {% if top_hashtags and top_hashtags[0].uses %}
+  <div class="card">
+    <div style="display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-4);">
+      <h2 style="margin:0;">Top hashtags</h2>
+      <a class="ghost micro" href="{{ url_for('hashtags', category=cat.id) }}">All {{ n_hashtags }} →</a>
+    </div>
+    <div style="margin-top:var(--sp-4);">
+      {{ listing.bars(top_hashtags, 'tag', 'uses', 'Posts in this category carrying each tag') }}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
 
 {# ── Runs ────────────────────────────────────────────────────────────── #}
 {% if runs %}

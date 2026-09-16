@@ -1,22 +1,91 @@
 {% extends "base.html" %}
 {% import "_logos.html" as logos %}
+{% import "_listing.html" as listing %}
 {% block title %}Hashtags · Strat-Watch Meta{% endblock %}
 {% block body %}
-<div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5);">
-  <h1>Hashtags</h1><span class="micro">{{ hashtags|length }} total</span>
+
+{% set args = {'platform': platform or '', 'keyword': keyword or '',
+               'category': (category.id if category else ''), 'sort': sort, 'per': per or 'all'} %}
+
+<div style="display:flex; align-items:baseline; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
+  <h1 style="margin:0;">Hashtags</h1>
+  {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
+  {% if category %}<a href="{{ url_for('category_detail', category_id=category.id) }}" class="kw">{{ category.name }}</a>{% endif %}
+  <span class="micro">
+    {%- if per and total > hashtags|length -%}showing {{ hashtags|length }} of {{ total }}
+    {%- else -%}{{ total }} hashtag{{ '' if total == 1 else 's' }}{%- endif -%}
+  </span>
 </div>
+
+{% if by_platform or top %}
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:var(--sp-5); margin-bottom:var(--sp-6);">
+  {% if by_platform %}
+  <div class="card">
+    <h2 style="margin-top:0;">Where they come from</h2>
+    {{ listing.platform_split(by_platform) }}
+  </div>
+  {% endif %}
+  {% if top and top[0].uses %}
+  <div class="card">
+    <h2 style="margin-top:0;">Most used hashtags</h2>
+    {{ listing.bars(top, 'tag', 'uses', 'Posts in this database carrying each tag') }}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="get" class="card" style="margin-bottom:var(--sp-5); display:flex; gap:var(--sp-2); flex-wrap:wrap; align-items:center;">
+  <select name="platform">
+    <option value="">All platforms</option>
+    <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
+    <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option>
+  </select>
+  <select name="category">
+    <option value="">All categories</option>
+    {% for c in all_categories %}<option value="{{ c.id }}" {{ 'selected' if category and category.id == c.id }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="sort">
+    <option value="uses" {{ 'selected' if sort=='uses' }}>Most used</option>
+    <option value="name" {{ 'selected' if sort=='name' }}>Name (A–Z)</option>
+  </select>
+  <input type="hidden" name="per" value="{{ per or 'all' }}">
+  <button>Filter</button>
+</form>
+
 {% if hashtags %}
 <div class="card" style="padding:0; overflow:hidden;">
+<div style="overflow-x:auto;">
 <table>
-  <tr><th>Platform</th><th>Hashtag</th><th>Post count</th></tr>
+  <thead>
+    <tr>
+      <th style="width:110px;">Platform</th>
+      <th>Hashtag</th>
+      <th class="num" style="width:90px;">Posts</th>
+    </tr>
+  </thead>
+  <tbody>
   {% for h in hashtags %}
   <tr>
     <td><span class="badge {{ h.platform }}">{{ logos.platform(h.platform, 14) }} {{ h.platform }}</span></td>
-    <td>{% if h.url %}<a href="{{ h.url }}" target="_blank" class="mono">#{{ h.tag }}</a>{% else %}<span class="mono">#{{ h.tag }}</span>{% endif %}</td>
-    <td class="mono">{{ '{:,}'.format(h.post_count) if h.post_count else '—' }}</td>
+    <td>
+      {% if h.url %}<a href="{{ h.url }}" target="_blank" rel="noopener" class="mono">#{{ h.tag }}</a>
+      {% else %}<span class="mono">#{{ h.tag }}</span>{% endif %}
+    </td>
+    <td class="num mono">{{ h.uses or '—' }}</td>
   </tr>
   {% endfor %}
+  </tbody>
 </table>
 </div>
-{% else %}<p class="muted">No hashtags yet.</p>{% endif %}
+</div>
+{{ listing.pager('hashtags', page, per, total, args) }}
+{% else %}
+<p class="muted">No hashtags match this filter.</p>
+{% endif %}
+
+<p class="muted micro" style="margin-top:var(--sp-5); max-width:720px;">
+  "Posts" is how many posts in this database carry the tag. The platform's own
+  global post count for a hashtag isn't collected — search results don't include
+  it — so it is no longer shown as an empty column.
+</p>
 {% endblock %}

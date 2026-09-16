@@ -1,36 +1,109 @@
 {% extends "base.html" %}
 {% import "_logos.html" as logos %}
+{% import "_listing.html" as listing %}
 {% block title %}Accounts · Strat-Watch Meta{% endblock %}
 {% block body %}
-<div style="display:flex; align-items:center; gap:var(--sp-3); margin-bottom:var(--sp-5);">
-  <h1>Accounts</h1>
+
+{% set args = {'platform': platform or '', 'keyword': keyword or '',
+               'category': (category.id if category else ''), 'sort': sort, 'per': per or 'all'} %}
+
+<div style="display:flex; align-items:baseline; gap:var(--sp-3); margin-bottom:var(--sp-5); flex-wrap:wrap;">
+  <h1 style="margin:0;">Accounts</h1>
   {% if keyword %}<span class="kw">{{ keyword }}</span>{% endif %}
-  <span class="micro">{{ accounts|length }} total</span>
+  {% if category %}<a href="{{ url_for('category_detail', category_id=category.id) }}" class="kw">{{ category.name }}</a>{% endif %}
+  <span class="micro">
+    {%- if per and total > accounts|length -%}showing {{ accounts|length }} of {{ total }}
+    {%- else -%}{{ total }} account{{ '' if total == 1 else 's' }}{%- endif -%}
+  </span>
 </div>
-<form method="get" style="margin-bottom:var(--sp-5);">
-  <select name="platform" onchange="this.form.submit()">
+
+{% if by_platform or top %}
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:var(--sp-5); margin-bottom:var(--sp-6);">
+  {% if by_platform %}
+  <div class="card">
+    <h2 style="margin-top:0;">Where they come from</h2>
+    {{ listing.platform_split(by_platform) }}
+  </div>
+  {% endif %}
+  {% if top and top[0].collected_posts %}
+  <div class="card">
+    <h2 style="margin-top:0;">Most productive accounts</h2>
+    {{ listing.bars(top, 'username', 'collected_posts', 'Posts collected from each account') }}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<form method="get" class="card" style="margin-bottom:var(--sp-5); display:flex; gap:var(--sp-2); flex-wrap:wrap; align-items:center;">
+  <select name="platform">
     <option value="">All platforms</option>
     <option value="instagram" {{ 'selected' if platform=='instagram' }}>Instagram</option>
     <option value="facebook" {{ 'selected' if platform=='facebook' }}>Facebook</option>
   </select>
+  <select name="category">
+    <option value="">All categories</option>
+    {% for c in all_categories %}<option value="{{ c.id }}" {{ 'selected' if category and category.id == c.id }}>{{ c.name }}</option>{% endfor %}
+  </select>
+  <select name="sort">
+    <option value="posts" {{ 'selected' if sort=='posts' }}>Most posts collected</option>
+    <option value="likes" {{ 'selected' if sort=='likes' }}>Most engagement</option>
+    <option value="recent" {{ 'selected' if sort=='recent' }}>Most recently active</option>
+    <option value="name" {{ 'selected' if sort=='name' }}>Name (A–Z)</option>
+  </select>
+  <input type="hidden" name="per" value="{{ per or 'all' }}">
+  <button>Filter</button>
 </form>
+
 {% if accounts %}
 <div class="card" style="padding:0; overflow:hidden;">
+<div style="overflow-x:auto;">
 <table>
-  <tr><th></th><th>Platform</th><th>Username</th><th>Name</th><th>Followers</th><th>Posts</th><th>✓</th><th>Bio</th></tr>
+  <thead>
+    <tr>
+      <th style="width:52px;"></th>
+      <th style="width:110px;">Platform</th>
+      <th>Account</th>
+      <th class="num" style="width:76px;">Posts</th>
+      <th class="num" style="width:84px;">Likes</th>
+      <th class="num" style="width:96px;">Comments</th>
+      <th style="width:110px;">Last post</th>
+    </tr>
+  </thead>
+  <tbody>
   {% for a in accounts %}
   <tr>
-    <td>{% if a.profile_picture_url %}<img class="thumb" style="width:40px;height:40px;border-radius:50%;" src="{{ a.profile_picture_url }}">{% endif %}</td>
+    <td>{% if a.profile_picture_url %}<img class="thumb" style="width:34px;height:34px;border-radius:50%;" src="{{ a.profile_picture_url }}" alt="">{% endif %}</td>
     <td><span class="badge {{ a.platform }}">{{ logos.platform(a.platform, 14) }} {{ a.platform }}</span></td>
-    <td><a href="{{ a.profile_url }}" target="_blank" class="mono">@{{ a.username }}</a></td>
-    <td>{{ a.display_name or '—' }}</td>
-    <td class="mono">{{ '{:,}'.format(a.follower_count) if a.follower_count else '—' }}</td>
-    <td class="mono">{{ a.post_count or '—' }}</td>
-    <td>{{ '✓' if a.is_verified else '' }}</td>
-    <td style="max-width:320px;" class="muted">{{ (a.bio or '')[:120] }}</td>
+    <td>
+      <a href="{{ a.profile_url }}" target="_blank" rel="noopener" class="mono">@{{ a.username }}</a>
+      {%- if a.is_verified %} <span title="verified">✓</span>{% endif %}
+      {% if a.display_name and a.display_name != a.username %}
+      <span class="muted micro" style="display:block;">{{ a.display_name[:60] }}</span>
+      {% endif %}
+    </td>
+    <td class="num mono">
+      {%- if a.collected_posts -%}
+      <a href="{{ url_for('posts', author=a.username, platform=a.platform, limit='all') }}">{{ a.collected_posts }}</a>
+      {%- else -%}0{%- endif -%}
+    </td>
+    <td class="num mono">{{ '{:,}'.format(a.total_likes) if a.total_likes else '—' }}</td>
+    <td class="num mono">{{ '{:,}'.format(a.total_comments) if a.total_comments else '—' }}</td>
+    <td class="muted micro">{{ (a.last_post_at or '—')[:10] }}</td>
   </tr>
   {% endfor %}
+  </tbody>
 </table>
 </div>
-{% else %}<p class="muted">No accounts yet.</p>{% endif %}
+</div>
+{{ listing.pager('accounts', page, per, total, args) }}
+{% else %}
+<p class="muted">No accounts match this filter.</p>
+{% endif %}
+
+<p class="muted micro" style="margin-top:var(--sp-5); max-width:720px;">
+  Follower counts, bios and profile post totals are not collected — search results
+  don't carry them, and visiting every profile to fetch them would be slow and far
+  more conspicuous. The figures above are what this database actually knows: how
+  many posts each account contributed and the engagement on them.
+</p>
 {% endblock %}

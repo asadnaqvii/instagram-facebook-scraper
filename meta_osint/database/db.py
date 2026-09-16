@@ -1055,42 +1055,205 @@ class PostDatabase:
         return row
 
     def get_accounts(self, platform: Optional[str] = None, keyword: Optional[str] = None,
-                     limit: int = 200) -> list[dict]:
+                     limit: Optional[int] = 300, offset: int = 0,
+                     category_id: Optional[int] = None,
+                     sort: str = "posts") -> list[dict]:
+        """Accounts, ranked by what they actually contributed.
+
+        This scraper never fills follower/bio/post_count from search results,
+        so ordering by follower_count sorted by NULL. What we really know is
+        how many posts of ours an account authored and the engagement on them,
+        which is what `sort='posts'` (the default) uses."""
         conn = self.connect()
-        sql = ["SELECT DISTINCT a.* FROM accounts a"]
+        sql = ["""SELECT a.*,
+                         COUNT(DISTINCT p.id) AS collected_posts,
+                         SUM(COALESCE(p.likes, 0)) AS total_likes,
+                         SUM(COALESCE(p.comments_count, 0)) AS total_comments,
+                         MAX(COALESCE(p.timestamp, p.scraped_at)) AS last_post_at
+                  FROM accounts a
+                  LEFT JOIN posts p ON p.author_username = a.username
+                       AND p.platform = a.platform"""]
         params: list[Any] = []
-        if keyword:
+        if keyword or category_id:
             sql.append("JOIN result_links rl ON rl.entity_type='account' AND rl.entity_id=a.id "
                        "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
         where = []
         if platform:
-            where.append("a.platform=?"); params.append(platform)
+            where.append("a.platform=?")
+            params.append(platform)
         if keyword:
-            where.append("k.keyword=?"); params.append(keyword)
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
         if where:
             sql.append("WHERE " + " AND ".join(where))
-        sql.append("ORDER BY a.follower_count IS NULL, a.follower_count DESC LIMIT ?")
-        params.append(limit)
-        return [dict(r) for r in conn.execute(" ".join(sql), params)]
+        sql.append("GROUP BY a.id")
+        order = {
+            "posts": "collected_posts DESC, total_likes DESC",
+            "likes": "total_likes DESC, collected_posts DESC",
+            "recent": "last_post_at IS NULL, last_post_at DESC",
+            "name": "a.username COLLATE NOCASE" if self.backend != "mysql" else "a.username",
+        }.get(sort, "collected_posts DESC, total_likes DESC")
+        sql.append(f"ORDER BY {order}")
+        if limit is not None:
+            sql.append("LIMIT ? OFFSET ?")
+            params.extend([limit, offset])
+        out = []
+        for r in conn.execute(" ".join(sql), tuple(params)):
+            row = dict(r)
+            for k2 in ("collected_posts", "total_likes", "total_comments"):
+                row[k2] = _num(row.get(k2)) or 0
+            row["last_post_at"] = _dt_to_str(row.get("last_post_at"))
+            out.append(row)
+        return out
+
+    def count_accounts(self, platform: Optional[str] = None, keyword: Optional[str] = None,
+                       category_id: Optional[int] = None) -> int:
+        conn = self.connect()
+        sql = ["SELECT COUNT(DISTINCT a.id) AS n FROM accounts a"]
+        params: list[Any] = []
+        if keyword or category_id:
+            sql.append("JOIN result_links rl ON rl.entity_type='account' AND rl.entity_id=a.id "
+                       "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
+        where = []
+        if platform:
+            where.append("a.platform=?")
+            params.append(platform)
+        if keyword:
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
+        if where:
+            sql.append("WHERE " + " AND ".join(where))
+        row = conn.execute(" ".join(sql), tuple(params)).fetchone()
+        return (_num(dict(row)["n"]) or 0) if row else 0
 
     def get_hashtags(self, platform: Optional[str] = None, keyword: Optional[str] = None,
-                     limit: int = 200) -> list[dict]:
+                     limit: Optional[int] = 200, offset: int = 0,
+                     category_id: Optional[int] = None,
+                     sort: str = "uses") -> list[dict]:
+        """Hashtags ranked by how often they appear on posts we collected.
+
+        `post_count` (the platform's own global count) is never populated by
+        search scraping — 0 of 1026 rows — so `uses` from post_hashtags is the
+        only real signal and is the default ordering."""
         conn = self.connect()
-        sql = ["SELECT DISTINCT h.* FROM hashtags h"]
+        sql = ["""SELECT h.*, COUNT(DISTINCT ph.post_id) AS uses
+                  FROM hashtags h
+                  LEFT JOIN post_hashtags ph ON ph.hashtag_id = h.id"""]
         params: list[Any] = []
-        if keyword:
+        if keyword or category_id:
             sql.append("JOIN result_links rl ON rl.entity_type='hashtag' AND rl.entity_id=h.id "
                        "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
         where = []
         if platform:
-            where.append("h.platform=?"); params.append(platform)
+            where.append("h.platform=?")
+            params.append(platform)
         if keyword:
-            where.append("k.keyword=?"); params.append(keyword)
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
         if where:
             sql.append("WHERE " + " AND ".join(where))
-        sql.append("ORDER BY h.post_count IS NULL, h.post_count DESC LIMIT ?")
-        params.append(limit)
-        return [dict(r) for r in conn.execute(" ".join(sql), params)]
+        sql.append("GROUP BY h.id")
+        order = {
+            "uses": "uses DESC, h.tag",
+            "name": "h.tag",
+        }.get(sort, "uses DESC, h.tag")
+        sql.append(f"ORDER BY {order}")
+        if limit is not None:
+            sql.append("LIMIT ? OFFSET ?")
+            params.extend([limit, offset])
+        out = []
+        for r in conn.execute(" ".join(sql), tuple(params)):
+            row = dict(r)
+            row["uses"] = _num(row.get("uses")) or 0
+            out.append(row)
+        return out
+
+    def count_hashtags(self, platform: Optional[str] = None, keyword: Optional[str] = None,
+                       category_id: Optional[int] = None) -> int:
+        conn = self.connect()
+        sql = ["SELECT COUNT(DISTINCT h.id) AS n FROM hashtags h"]
+        params: list[Any] = []
+        if keyword or category_id:
+            sql.append("JOIN result_links rl ON rl.entity_type='hashtag' AND rl.entity_id=h.id "
+                       "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
+        where = []
+        if platform:
+            where.append("h.platform=?")
+            params.append(platform)
+        if keyword:
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
+        if where:
+            sql.append("WHERE " + " AND ".join(where))
+        row = conn.execute(" ".join(sql), tuple(params)).fetchone()
+        return (_num(dict(row)["n"]) or 0) if row else 0
+
+    def accounts_by_platform(self, keyword: Optional[str] = None,
+                             category_id: Optional[int] = None) -> list[dict]:
+        """Account counts per platform, for the page's summary chart."""
+        conn = self.connect()
+        sql = ["SELECT a.platform, COUNT(DISTINCT a.id) AS n FROM accounts a"]
+        params: list[Any] = []
+        if keyword or category_id:
+            sql.append("JOIN result_links rl ON rl.entity_type='account' AND rl.entity_id=a.id "
+                       "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
+        where = []
+        if keyword:
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
+        if where:
+            sql.append("WHERE " + " AND ".join(where))
+        sql.append("GROUP BY a.platform ORDER BY n DESC")
+        return [{"platform": dict(r)["platform"], "n": _num(dict(r)["n"]) or 0}
+                for r in conn.execute(" ".join(sql), tuple(params))]
+
+    def hashtags_by_platform(self, keyword: Optional[str] = None,
+                             category_id: Optional[int] = None) -> list[dict]:
+        conn = self.connect()
+        sql = ["SELECT h.platform, COUNT(DISTINCT h.id) AS n FROM hashtags h"]
+        params: list[Any] = []
+        if keyword or category_id:
+            sql.append("JOIN result_links rl ON rl.entity_type='hashtag' AND rl.entity_id=h.id "
+                       "JOIN keywords k ON k.id=rl.keyword_id")
+        if category_id:
+            sql.append("JOIN category_keywords ck ON ck.keyword_id=k.id")
+        where = []
+        if keyword:
+            where.append("k.keyword=?")
+            params.append(keyword)
+        if category_id:
+            where.append("ck.category_id=?")
+            params.append(category_id)
+        if where:
+            sql.append("WHERE " + " AND ".join(where))
+        sql.append("GROUP BY h.platform ORDER BY n DESC")
+        return [{"platform": dict(r)["platform"], "n": _num(dict(r)["n"]) or 0}
+                for r in conn.execute(" ".join(sql), tuple(params))]
 
     def get_places(self, keyword: Optional[str] = None, limit: int = 200) -> list[dict]:
         conn = self.connect()

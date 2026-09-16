@@ -244,6 +244,15 @@ def _parse_limit(raw: str, default: int = 200) -> int | None:
     return default
 
 
+def _page_args(default_per: int = 100):
+    """(per_page, page, offset) from the query string. per=all -> no limit."""
+    per = _parse_limit(request.args.get("per", ""), default=default_per)
+    raw_page = (request.args.get("page") or "1").strip()
+    page = int(raw_page) if raw_page.isdigit() and int(raw_page) > 0 else 1
+    offset = ((page - 1) * per) if per else 0
+    return per, page, offset
+
+
 def _attach_media_urls(posts: list[dict]) -> list[dict]:
     """Add browser-servable URLs for each downloaded media file + thumbnail."""
     for p in posts:
@@ -386,31 +395,40 @@ def create_app() -> Flask:
         keyword = request.args.get("keyword") or None
         cat_arg = request.args.get("category") or ""
         category_id = int(cat_arg) if cat_arg.isdigit() else None
+        author = request.args.get("author") or None
         sort = request.args.get("sort") or "latest"
         since = request.args.get("since") or ""
         since_days = parse_since_days(since)
         limit = _parse_limit(request.args.get("limit", ""))
         # 'relevancy' is a display-time derived value, so fetch by a real sort
-        # then re-order in Python.
+        # then re-order in Python. Because the score is computed AFTER the
+        # query, ranking by it has to consider the whole filtered set —
+        # otherwise "most relevant" quietly means "most relevant among the
+        # newest 200" and a highly relevant older post never surfaces.
         db_sort = "latest" if sort == "relevancy" else sort
+        fetch_limit = None if sort == "relevancy" else limit
         with PostDatabase(config.DB_PATH) as db:
             ai_scores = db.get_strategic_scores()
             rows = _attach_relevancy(_attach_media_urls(
                 db.get_posts(platform=platform, keyword=keyword, sort=db_sort,
-                             limit=limit, since_days=since_days,
-                             category_id=category_id)),
+                             limit=fetch_limit, since_days=since_days,
+                             category_id=category_id, author=author)),
                 ai_scores)
             all_keywords = [k["keyword"] for k in db.get_keywords()]
             all_categories = db.get_categories()
             category = db.get_category(category_id) if category_id else None
             total = db.count_posts(platform=platform, keyword=keyword,
-                                   since_days=since_days, category_id=category_id)
+                                   since_days=since_days, category_id=category_id,
+                                   author=author)
         if sort == "relevancy":
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
+            if limit:          # ranked globally above; now trim for display
+                rows = rows[:limit]
         return render_template("posts.html", posts=rows, platform=platform, keyword=keyword,
                                sort=sort, since=since, all_keywords=all_keywords,
                                all_categories=all_categories,
-                               category=category, total=total, limit=limit)
+                               category=category, total=total, limit=limit,
+                               author=author)
 
     @app.route("/keyword/<path:keyword>")
     def keyword_detail(keyword):
@@ -429,15 +447,52 @@ def create_app() -> Flask:
     def accounts():
         platform = request.args.get("platform") or None
         keyword = request.args.get("keyword") or None
+        cat_arg = request.args.get("category") or ""
+        category_id = int(cat_arg) if cat_arg.isdigit() else None
+        sort = request.args.get("sort") or "posts"
+        per, page, offset = _page_args(100)
         with PostDatabase(config.DB_PATH) as db:
-            rows = db.get_accounts(platform=platform, keyword=keyword, limit=300)
-        return render_template("accounts.html", accounts=rows, platform=platform, keyword=keyword)
+            rows = db.get_accounts(platform=platform, keyword=keyword,
+                                   category_id=category_id, sort=sort,
+                                   limit=per, offset=offset)
+            total = db.count_accounts(platform=platform, keyword=keyword,
+                                      category_id=category_id)
+            all_categories = db.get_categories()
+            category = db.get_category(category_id) if category_id else None
+            # Chart data: top contributors overall, not just this page.
+            top = db.get_accounts(platform=platform, keyword=keyword,
+                                  category_id=category_id, sort="posts", limit=12)
+            by_platform = db.accounts_by_platform(keyword=keyword, category_id=category_id)
+        return render_template("accounts.html", accounts=rows, platform=platform,
+                               keyword=keyword, category=category,
+                               all_categories=all_categories, sort=sort,
+                               total=total, per=per, page=page,
+                               top=top, by_platform=by_platform, path=request.path)
 
     @app.route("/hashtags")
     def hashtags():
+        platform = request.args.get("platform") or None
+        keyword = request.args.get("keyword") or None
+        cat_arg = request.args.get("category") or ""
+        category_id = int(cat_arg) if cat_arg.isdigit() else None
+        sort = request.args.get("sort") or "uses"
+        per, page, offset = _page_args(100)
         with PostDatabase(config.DB_PATH) as db:
-            rows = db.get_hashtags(limit=200)
-        return render_template("hashtags.html", hashtags=rows)
+            rows = db.get_hashtags(platform=platform, keyword=keyword,
+                                   category_id=category_id, sort=sort,
+                                   limit=per, offset=offset)
+            total = db.count_hashtags(platform=platform, keyword=keyword,
+                                      category_id=category_id)
+            all_categories = db.get_categories()
+            category = db.get_category(category_id) if category_id else None
+            top = db.get_hashtags(platform=platform, keyword=keyword,
+                                  category_id=category_id, sort="uses", limit=15)
+            by_platform = db.hashtags_by_platform(keyword=keyword, category_id=category_id)
+        return render_template("hashtags.html", hashtags=rows, platform=platform,
+                               keyword=keyword, category=category,
+                               all_categories=all_categories, sort=sort,
+                               total=total, per=per, page=page,
+                               top=top, by_platform=by_platform, path=request.path)
 
     # ── Strategic Intelligence (AI enrichment) ───────────────────────
 
@@ -579,12 +634,19 @@ def create_app() -> Flask:
             total = db.count_posts(category_id=category_id, since_days=since_days)
             runs = db.get_run_history(limit=40, category_id=category_id)
             timing = db.get_category_timing().get(category_id)
+            # The same real metrics the Accounts/Hashtags pages use, scoped here.
+            top_accounts = db.get_accounts(category_id=category_id, sort="posts", limit=10)
+            top_hashtags = db.get_hashtags(category_id=category_id, sort="uses", limit=12)
+            n_accounts = db.count_accounts(category_id=category_id)
+            n_hashtags = db.count_hashtags(category_id=category_id)
         if sort == "relevancy":
             rows.sort(key=lambda p: p.get("relevancy") or 0, reverse=True)
         return render_template("category_detail.html", cat=cat, kw_stats=kw_stats,
                                posts=rows, runs=runs, timing=timing,
                                sort=sort, since=since, path=request.path,
-                               total=total, limit=limit)
+                               total=total, limit=limit,
+                               top_accounts=top_accounts, top_hashtags=top_hashtags,
+                               n_accounts=n_accounts, n_hashtags=n_hashtags)
 
     @app.route("/api/category/<int:category_id>")
     def api_category_detail(category_id):
