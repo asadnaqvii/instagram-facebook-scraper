@@ -111,15 +111,43 @@ async def scrape_platform(
         _log(progress, f"[{platform}] SKIPPED — {e}")
         for kw in cfg.keywords:
             summaries.append({"platform": platform, "keyword": kw, "error": "cdp_unavailable"})
+            _emit("keyword_error", keyword=kw, error="browser not reachable")
+        return summaries
+    except Exception as e:  # noqa: BLE001
+        # Anything else from the browser layer ("Connection closed while
+        # reading from the driver", a crashed Chrome, a protocol error) must
+        # stay contained: the OTHER platform is a separate task and keeps going.
+        _log(progress, f"[{platform}] SKIPPED — browser unavailable: "
+                       f"{type(e).__name__}: {str(e)[:100]}")
+        for kw in cfg.keywords:
+            summaries.append({"platform": platform, "keyword": kw,
+                              "error": f"browser_unavailable: {type(e).__name__}"})
+            _emit("keyword_error", keyword=kw, error=f"browser unavailable ({type(e).__name__})")
         return summaries
 
     try:
-        page = await manager.new_page()
+        try:
+            page = await manager.new_page()
+        except Exception as e:  # noqa: BLE001
+            # The CDP socket can drop between connecting and opening a tab.
+            _log(progress, f"[{platform}] SKIPPED — could not open a page: "
+                           f"{type(e).__name__}: {str(e)[:90]}")
+            for kw in cfg.keywords:
+                summaries.append({"platform": platform, "keyword": kw,
+                                  "error": f"browser_unavailable: {type(e).__name__}"})
+                _emit("keyword_error", keyword=kw, error="could not open a browser page")
+            return summaries
 
         # Export authenticated cookies so yt-dlp can read gated content
         # (essential for Instagram — without the session cookie yt-dlp gets
         # nothing, which is why IG posts came back empty otherwise).
-        cookie_path = await export_cookies(manager.context, platform)
+        # A cookie-export failure is NOT fatal: yt-dlp simply gets less.
+        try:
+            cookie_path = await export_cookies(manager.context, platform)
+        except Exception as e:  # noqa: BLE001
+            _log(progress, f"[{platform}] cookie export failed "
+                           f"({type(e).__name__}) — continuing without them")
+            cookie_path = None
         media_mod.set_cookie_file(platform, cookie_path)
         if cookie_path:
             _log(progress, f"[{platform}] cookies exported for yt-dlp")
@@ -172,6 +200,10 @@ async def scrape_platform(
                     _log(progress, f"[{platform}] {kw!r}: streaming save failed — "
                                    f"{type(e).__name__}: {str(e)[:70]}")
 
+            # A dropped CDP connection is not recoverable by opening another
+            # tab on the same dead browser — detect it and stop this platform,
+            # leaving the other platform's task untouched.
+            _conn_dead = False
             for attempt in (1, 2):
                 try:
                     if page.is_closed():
@@ -181,6 +213,15 @@ async def scrape_platform(
                     break
                 except Exception as e:  # noqa: BLE001 — never let one keyword kill the batch
                     _log(progress, f"[{platform}] {kw!r} attempt {attempt} failed: {str(e)[:120]}")
+                    # "Connection closed while reading from the driver", "Target
+                    # crashed", "Browser has been closed" all mean the browser
+                    # is gone; retrying a keyword against it just burns time.
+                    _msg = str(e).lower()
+                    if any(s in _msg for s in ("connection closed", "browser has been closed",
+                                               "target crashed", "target page, context or browser"
+                                               " has been closed", "websocket")):
+                        _conn_dead = True
+                        break
                     if attempt == 1:
                         # Try to revive the browser page for the retry + next keywords.
                         # Close the dead one first — otherwise every failed keyword
@@ -201,6 +242,22 @@ async def scrape_platform(
                 result = SearchResult(platform=Platform(platform), keyword=kw, error="crashed: unknown")
                 result.finished_at = _now_iso()
             result._streamed_urls = streamed
+
+            if _conn_dead:
+                # Close out this keyword honestly, mark the rest skipped, and
+                # stop — the other platform is a separate task and continues.
+                result.error = result.error or "browser connection lost"
+                db.finish_run(run_id, result)
+                _emit("keyword_error", keyword=kw, error="browser connection lost")
+                _log(progress, f"[{platform}] browser connection lost — "
+                               f"stopping this platform; remaining keyword(s) skipped")
+                summaries.append({**result.summary(), "error": "browser_connection_lost"})
+                _remaining = [k for k in cfg.keywords[cfg.keywords.index(kw) + 1:]]
+                for _k in _remaining:
+                    summaries.append({"platform": platform, "keyword": _k,
+                                      "error": "skipped_browser_lost"})
+                    _emit("keyword_error", keyword=_k, error="skipped — browser connection lost")
+                break
 
             # Pause between keywords. A real person doesn't fire searches
             # back-to-back at a fixed interval; this also spreads load so a

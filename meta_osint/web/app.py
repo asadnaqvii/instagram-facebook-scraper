@@ -69,6 +69,13 @@ def _run_job(job_id: str, cfg: ScrapeConfig) -> None:
                 row["elapsed_s"] = ev.get("elapsed_s")
                 row["error"] = ev.get("error")
                 break
+        else:
+            # No open row: the keyword never started (its platform's browser
+            # was unavailable, or it was skipped after a connection loss).
+            # Record it anyway so the page shows WHY nothing ran.
+            rows.append({"keyword": kw, "platform": platform, "status": "error",
+                         "posts": None, "elapsed_s": None,
+                         "error": ev.get("error")})
         job["done_count"] = sum(1 for r in rows if r["status"] != "running")
 
     def should_stop() -> bool:
@@ -213,6 +220,18 @@ def _run_enrich_job(job_id: str, rescore: bool = False) -> None:
         job["status"] = "error"
         job["error"] = str(e)
         lines.append(f"Error: {e}")
+
+
+def _running_job_id() -> str | None:
+    """Id of a scrape already in flight, if any.
+
+    Scrapes drive ONE real Chrome per platform over CDP. Two jobs at once means
+    two schedulers navigating the same browser, which crashes tabs and produces
+    "Connection closed while reading from the driver". So only one may run."""
+    for jid, j in JOBS.items():
+        if j.get("status") in ("queued", "running") and not j.get("cancel"):
+            return jid
+    return None
 
 
 def _parse_limit(raw: str, default: int = 200) -> int | None:
@@ -620,9 +639,22 @@ def create_app() -> Flask:
         since = request.form.get("since", "").strip()
         config.FRESHNESS_DAYS = int(since) if since.isdigit() else 0
 
+        busy = _running_job_id()
+        if busy:
+            return redirect(url_for(
+                "categories",
+                error=f"A scrape is already running (job {busy}). Wait for it to "
+                      f"finish or stop it first — two scrapes share one Chrome "
+                      f"and crash each other."))
+        # Unticking everything must not silently re-add both platforms: that is
+        # how a Facebook-only run ends up blocked by a dead Instagram browser.
+        picked_platforms = request.form.getlist("platforms")
+        if not picked_platforms:
+            return redirect(url_for(
+                "categories", error="Pick at least one platform to scrape."))
         cfg = ScrapeConfig(
             keywords=keywords,
-            platforms=request.form.getlist("platforms") or list(config.PLATFORMS),
+            platforms=picked_platforms,
             mode="search",
             max_posts=int(request.form.get("max_posts", 15) or 15),
             with_comments=request.form.get("comments") == "on",
@@ -750,6 +782,13 @@ def create_app() -> Flask:
                     "scrape.html", platforms=config.PLATFORMS,
                     error="Please type at least one keyword. The grey example text is not submitted.",
                 )
+            busy = _running_job_id()
+            if busy:
+                return render_template(
+                    "scrape.html", platforms=config.PLATFORMS,
+                    error=f"A scrape is already running (job {busy}). Two scrapes "
+                          f"share one Chrome and crash each other — wait for it to "
+                          f"finish, or stop it from its job page.")
             platforms = request.form.getlist("platforms") or list(config.PLATFORMS)
             cfg = ScrapeConfig(
                 keywords=keywords,
