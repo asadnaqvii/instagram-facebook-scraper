@@ -601,8 +601,23 @@ async def search_keyword(
         return True
 
     try:
+        # IG_MAX_POSTS_CAP is a SAFETY DEFAULT against Instagram's rate
+        # limiting, not a hard limit on what you may ask for. Clamping silently
+        # made "max posts" look broken on Instagram; an explicit request above
+        # the cap is honoured, and a clamp is always reported.
         ig_cap = config.IG_MAX_POSTS_CAP or max_posts
-        want = min(max_posts, ig_cap)
+        want = max_posts
+        if config.IG_RESPECT_MAX_POSTS:
+            if max_posts > ig_cap:
+                _tick(f"[instagram] {keyword!r}: collecting {max_posts} "
+                      f"(above the IG_MAX_POSTS_CAP guard of {ig_cap}) — "
+                      f"watch for rate limiting")
+        else:
+            want = min(max_posts, ig_cap)
+            if max_posts > ig_cap:
+                _tick(f"[instagram] {keyword!r}: asked for {max_posts} but "
+                      f"IG_MAX_POSTS_CAP={ig_cap} — collecting {want}. "
+                      f"Raise IG_MAX_POSTS_CAP to lift it.")
         links: list[str] = []
         used_tag = tag
         for _cand in tag_candidates:

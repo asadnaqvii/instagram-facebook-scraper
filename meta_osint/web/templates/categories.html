@@ -56,7 +56,7 @@
 {% endif %}
 
 {# ── Batch runner ────────────────────────────────────────── #}
-<form method="post" action="{{ url_for('categories_batch') }}" class="card" style="margin-bottom:var(--sp-6);">
+<form method="post" action="{{ url_for('categories_batch') }}" class="card" id="batch-form" style="margin-bottom:var(--sp-6);">
   <h2 style="margin-top:0;">Run a batch</h2>
   <p class="muted micro" style="margin-top:0;">
     Every keyword in the ticked categories is scraped newest-first, highest weight
@@ -90,7 +90,8 @@
     </div>
     <div>
       <label>Max posts / keyword</label>
-      <input type="number" name="max_posts" value="15" min="1" max="200" style="width:110px;">
+      <input type="number" name="max_posts" value="15" min="1" max="200" style="width:110px;"
+             title="Per keyword, per platform. Facebook will collect up to this many; Instagram is additionally guarded by IG_MAX_POSTS_CAP.">
     </div>
     <div>
       <label>Only posts newer than</label>
@@ -173,11 +174,16 @@
             <input type="hidden" name="enabled" value="{{ 0 if c.enabled else 1 }}">
             <button type="submit" class="ghost micro">{{ 'Disable' if c.enabled else 'Enable' }}</button>
           </form>
-          <form method="post" action="{{ url_for('categories_batch') }}" style="display:inline;">
+          <form method="post" action="{{ url_for('categories_batch') }}" style="display:inline;"
+                onsubmit="this.max_posts.value = document.querySelector('#batch-form [name=max_posts]').value;
+                          this.since.value = document.querySelector('#batch-form [name=since]').value;">
             <input type="hidden" name="category" value="{{ c.id }}">
+            {# Mirrors the batch form above, so a quick Run uses the same
+               settings you can see rather than a hidden 15. #}
             <input type="hidden" name="max_posts" value="15">
             <input type="hidden" name="since" value="7">
-            <button type="submit" class="ghost micro">Run</button>
+            <button type="submit" class="ghost micro"
+                    title="Run just this category with the settings from the batch form above">Run</button>
           </form>
         </td>
       </tr>

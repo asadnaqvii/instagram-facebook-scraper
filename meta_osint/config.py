@@ -103,6 +103,10 @@ IG_PER_POST_COOLDOWN_S = float(os.getenv("IG_PER_POST_COOLDOWN_S", "4.0"))
 # Cap IG posts-per-keyword lower than the global default, so each keyword is a
 # smaller burst. Set to 0 to use the requested max_posts unchanged.
 IG_MAX_POSTS_CAP = int(os.getenv("IG_MAX_POSTS_CAP", "25"))
+# When true (default) an explicit -n / "max posts" above IG_MAX_POSTS_CAP is
+# honoured and the cap acts only as a default. Set false to make the cap a
+# hard ceiling again (safer on an account that keeps hitting 429s).
+IG_RESPECT_MAX_POSTS = os.getenv("IG_RESPECT_MAX_POSTS", "true").lower() == "true"
 
 # ── Human-behaviour simulation ───────────────────────────────────────
 # Uniform-random timing is itself detectable. These shape the delay model in
