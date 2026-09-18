@@ -685,12 +685,19 @@ def create_app() -> Flask:
         Batch runs are for periodic collection, so they always sort newest-first
         (SORT_MODE=recent); the optional `since` drops anything older."""
         ids = [int(i) for i in request.form.getlist("category") if i.strip().isdigit()]
+        # No fallback to "everything enabled": the form starts with nothing
+        # ticked, so an empty selection means the user has not chosen yet — and
+        # silently launching all 335 keywords would be a very expensive
+        # surprise.
+        if not ids:
+            return redirect(url_for(
+                "categories", error="Select at least one category to run."))
         with PostDatabase(config.DB_PATH) as db:
-            keywords = db.batch_keywords(ids or None, enabled_only=not ids)
+            keywords = db.batch_keywords(ids, enabled_only=False)
             cats = db.get_categories()
         if not keywords:
             return redirect(url_for(
-                "categories", error="Pick at least one category with keywords in it."))
+                "categories", error="Those categories have no keywords in them."))
 
         limit = request.form.get("limit", "").strip()
         if limit.isdigit() and int(limit) > 0:
@@ -883,15 +890,17 @@ def create_app() -> Flask:
 
     @app.route("/api/job/<job_id>/stop", methods=["POST"])
     def api_job_stop(job_id):
-        """Request a graceful stop: the scrape finishes the keyword it's on,
-        then skips the rest. (Cooperative — avoids killing the browser
-        mid-navigation.)"""
+        """Request a stop. Cooperative, so the browser is never killed
+        mid-navigation, but it lands within seconds: the scrapers check the
+        flag at every boundary and any in-flight page wait is collapsed.
+        Whatever was collected is already saved."""
         job = JOBS.get(job_id)
         if not job:
             return jsonify({"error": "not found"}), 404
         if job.get("status") in ("queued", "running"):
             job["cancel"] = True
-            job.setdefault("log", []).append("[stop requested — finishing current keyword, then stopping…]")
+            job.setdefault("log", []).append(
+                "[stop requested — aborting current step; collected posts are already saved]")
             return jsonify({"ok": True, "status": "stopping"})
         return jsonify({"ok": False, "status": job.get("status")})
 

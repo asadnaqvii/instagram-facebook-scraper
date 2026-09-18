@@ -514,6 +514,7 @@ async def search_keyword(
     progress=None,
     known_urls: set | None = None,
     on_posts=None,
+    should_stop=None,
 ) -> SearchResult:
     """Full keyword search: accounts + hashtags + places + hashtag-feed posts.
 
@@ -591,6 +592,13 @@ async def search_keyword(
     _budget_hit = [False]
 
     def _out_of_time(where: str = "") -> bool:
+        """True when this keyword must wind down: Stop pressed, or budget spent."""
+        if should_stop is not None and should_stop():
+            if not _budget_hit[0]:
+                _budget_hit[0] = True
+                _tick(f"[instagram] {keyword!r}: stop requested — keeping what "
+                      f"was collected and winding down")
+            return True
         if _deadline is None or _monotonic() < _deadline:
             return False
         if not _budget_hit[0]:

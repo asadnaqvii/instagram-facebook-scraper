@@ -67,6 +67,7 @@ async def _run_one(
     progress: Optional[ProgressFn] = None,
     known_urls: set | None = None,
     on_posts=None,
+    should_stop: Optional[StopFn] = None,
 ) -> SearchResult:
     """Dispatch a single (platform, keyword) to the right extractor."""
     module = ig if platform == "instagram" else fb
@@ -81,6 +82,7 @@ async def _run_one(
     return await module.search_keyword(
         page, kw, healer, cfg.max_posts, cfg.with_comments,
         progress=progress, known_urls=known_urls, on_posts=on_posts,
+        should_stop=should_stop,
     )
 
 
@@ -204,12 +206,32 @@ async def scrape_platform(
             # tab on the same dead browser — detect it and stop this platform,
             # leaving the other platform's task untouched.
             _conn_dead = False
+            # Once Stop is pressed, stop waiting on the browser: drop the
+            # page's default timeout so any in-flight navigation or wait fails
+            # fast instead of running its full 25s. The scrapers already check
+            # should_stop at each boundary; this collapses the one operation
+            # that may already be in progress.
+            async def _watch_for_stop() -> None:
+                while True:
+                    await asyncio.sleep(0.5)
+                    if page.is_closed():
+                        return
+                    if _stopped(should_stop):
+                        try:
+                            page.set_default_timeout(1)
+                            page.set_default_navigation_timeout(1)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return
+
+            _stop_watch = asyncio.create_task(_watch_for_stop())
             for attempt in (1, 2):
                 try:
                     if page.is_closed():
                         raise RuntimeError("page was closed")
                     result = await _run_one(platform, kw, cfg.mode, page, healer, cfg,
-                                            progress, known_urls, on_posts=_flush)
+                                            progress, known_urls, on_posts=_flush,
+                                            should_stop=should_stop)
                     break
                 except Exception as e:  # noqa: BLE001 — never let one keyword kill the batch
                     _log(progress, f"[{platform}] {kw!r} attempt {attempt} failed: {str(e)[:120]}")
@@ -238,6 +260,7 @@ async def scrape_platform(
                     else:
                         result = SearchResult(platform=Platform(platform), keyword=kw, error=f"crashed: {e}")
                         result.finished_at = _now_iso()
+            _stop_watch.cancel()
             if result is None:
                 result = SearchResult(platform=Platform(platform), keyword=kw, error="crashed: unknown")
                 result.finished_at = _now_iso()

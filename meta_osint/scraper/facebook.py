@@ -639,6 +639,7 @@ async def search_keyword(
     progress=None,
     known_urls: set | None = None,
     on_posts=None,
+    should_stop=None,
 ) -> SearchResult:
     result = SearchResult(platform=Platform.facebook, keyword=keyword, started_at=now_iso())
     _pending: list = []
@@ -674,7 +675,16 @@ async def search_keyword(
     _budget_hit = False
 
     def _out_of_time(where: str = "") -> bool:
+        """True when this keyword must wind down: the user pressed Stop, or the
+        time budget ran out. Checked at every expensive boundary so both land
+        within seconds instead of at the end of the keyword."""
         nonlocal _budget_hit
+        if should_stop is not None and should_stop():
+            if not _budget_hit:
+                _budget_hit = True
+                _tick(f"[facebook] {keyword!r}: stop requested — keeping "
+                      f"{len(raw_posts)} raw post(s) and winding down")
+            return True
         if _deadline is None or _monotonic() < _deadline:
             return False
         if not _budget_hit:
@@ -860,6 +870,8 @@ async def search_keyword(
         fresh_cutoff = (datetime.now(timezone.utc) - timedelta(days=fresh_days)) if fresh_days > 0 else None
         stale = 0
         for raw in raw_posts[:max_posts]:
+            if _out_of_time('post enrichment'):
+                break
             url = raw.get("post_url") or ""
             # Delta scraping: refresh engagement for a post we already have,
             # rather than re-storing it as new.

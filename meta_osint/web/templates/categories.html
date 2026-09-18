@@ -59,15 +59,17 @@
 <form method="post" action="{{ url_for('categories_batch') }}" class="card" id="batch-form" style="margin-bottom:var(--sp-6);">
   <h2 style="margin-top:0;">Run a batch</h2>
   <p class="muted micro" style="margin-top:0;">
-    Every keyword in the ticked categories is scraped newest-first, highest weight
-    (W3) first. Keywords shared between categories run once. Facebook and Instagram
+    Tick the categories to scrape. Every keyword in them is collected
+    newest-first, highest weight (W3) first. Keywords shared between categories run once. Facebook and Instagram
     run at the same time; within each, keywords go one at a time with human pauses.
   </p>
 
   <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:8px var(--sp-5); margin:var(--sp-4) 0;">
     {% for c in cats %}
     <label style="display:flex; align-items:baseline; gap:8px; margin:0; text-transform:none; font-family:var(--font-body); font-size:14px; color:var(--fg-1);">
-      <input type="checkbox" name="category" value="{{ c.id }}" {{ 'checked' if c.enabled }}>
+      {# Unchecked by default: a batch should scrape what you deliberately
+         picked, not every enabled category. #}
+      <input type="checkbox" name="category" value="{{ c.id }}">
       <span>
         <span class="kw">{{ c.weight }}</span>
         {{ c.name }}
