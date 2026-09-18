@@ -34,12 +34,52 @@ class BrowserManager:
         self.context: BrowserContext | None = None
         self._own_pages: list[Page] = []
 
+    # Failures that mean "the Playwright driver subprocess died", not "Chrome is
+    # not there". These are transient and worth one clean retry: a long-lived
+    # server process can fail to spawn a working driver even though Chrome is
+    # healthy and a fresh process connects to it fine.
+    _DRIVER_ERRORS = (
+        "connection closed while reading from the driver",
+        "target closed",
+        "browser closed",
+        "pipe closed",
+        "driver",
+    )
+
+    @classmethod
+    def _is_driver_failure(cls, err: Exception) -> bool:
+        msg = str(err).lower()
+        return any(s in msg for s in cls._DRIVER_ERRORS)
+
     async def start(self) -> "BrowserManager":
-        self._pw = await async_playwright().start()
-        try:
-            self.browser = await self._pw.chromium.connect_over_cdp(self.endpoint)
-        except Exception as e:  # noqa: BLE001 — surface a clear, actionable error
-            await self._cleanup_pw()
+        last: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                self._pw = await async_playwright().start()
+                self.browser = await self._pw.chromium.connect_over_cdp(self.endpoint)
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+                # Tear the half-started Playwright down so the retry gets a
+                # fresh driver subprocess rather than reusing a broken one.
+                await self._cleanup_pw()
+                if attempt == 1 and self._is_driver_failure(e):
+                    await asyncio.sleep(1.5)
+                    continue
+                break
+        if self.browser is None:
+            e = last or RuntimeError("unknown browser startup failure")
+            if self._is_driver_failure(e):
+                raise CDPConnectionError(
+                    f"The browser driver failed for {self.platform} "
+                    f"(Chrome itself may be fine).\n"
+                    f"This happens in a dashboard process that has been running for "
+                    f"a long time: each scrape starts a Playwright driver subprocess, "
+                    f"and eventually one fails to start.\n"
+                    f"FIX: restart the dashboard (stop it and run `serve` again). "
+                    f"Chrome can stay open and logged in.\n"
+                    f"(underlying error: {e})"
+                ) from e
             raise CDPConnectionError(
                 f"Could not connect to Chrome for {self.platform} at {self.endpoint}.\n"
                 f"Start it first:\n"
