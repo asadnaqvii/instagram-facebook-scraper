@@ -17,13 +17,15 @@ DOM at all.
 from __future__ import annotations
 
 import asyncio
+import random as _random
 from time import monotonic as _monotonic
 from typing import Optional
 
 from playwright.async_api import Page
 
 from .. import config
-from ..browser.manager import human_delay, scroll_page, detect_and_handle_rate_limit
+from ..browser.manager import (human_delay, human_mouse, scroll_page,
+                               detect_and_handle_rate_limit)
 from ..llm.healer import SelectorHealer
 from ..models import (
     Account,
@@ -220,9 +222,18 @@ async def extract_post(
         post.raw_meta = {"source": "yt-dlp"}
 
     # 2. Navigate for DOM-only fields (caption fallback, location, comments).
+    #
+    # Every browser visit here is a SECOND request for a post yt-dlp already
+    # fetched, doubling the rate Instagram sees. When yt-dlp returned a caption
+    # and media and the caller does not want comments, the page visit adds
+    # nothing worth the exposure, so skip it.
+    if post.text and post.media and not with_comments:
+        return post
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=25000)
         await human_delay("action", "instagram")
+        # A person's cursor moves while a post loads.
+        await human_mouse(page)
     except Exception:
         return post if (post.text or post.media) else None
 
@@ -628,9 +639,20 @@ async def search_keyword(
                       f"Raise IG_MAX_POSTS_CAP to lift it.")
         links: list[str] = []
         used_tag = tag
-        for _cand in tag_candidates:
+        for _ti, _cand in enumerate(tag_candidates):
             if _out_of_time("hashtag grids"):
                 break
+            # Going straight from one tag URL to the next is a machine pattern.
+            # Between tags, drop back to the home feed and linger, the way a
+            # person backs out before searching again.
+            if _ti > 0:
+                try:
+                    await page.goto(f"{IG}/", wait_until="domcontentloaded", timeout=25000)
+                    await human_delay("action", "instagram")
+                    await scroll_page(page, _random.randint(1, 3), "instagram")
+                    await human_mouse(page)
+                except Exception:  # noqa: BLE001 - a failed detour must not kill the run
+                    pass
             await page.goto(f"{IG}/explore/tags/{_cand}/", wait_until="domcontentloaded", timeout=25000)
             await human_delay("action", "instagram")
             if await detect_and_handle_rate_limit(page, "instagram", progress):
@@ -639,6 +661,7 @@ async def search_keyword(
                 return result
             if not await check_login(page):
                 break
+            await human_mouse(page)
             _found = await collect_post_links(page, want)
             _tick(f"[instagram] {keyword!r}: #{_cand} -> {len(_found)} link(s)")
             if _found:

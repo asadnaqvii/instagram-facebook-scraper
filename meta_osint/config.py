@@ -98,7 +98,9 @@ IG_DELAY_MULTIPLIER = float(os.getenv("IG_DELAY_MULTIPLIER", "2.2"))
 # Extra cooldown between opening each Instagram post. Opening a post is a full
 # page navigation — the main 429 trigger — so a real pause here (on top of the
 # per-action delay) matters most. Randomised up to +50%.
-IG_PER_POST_COOLDOWN_S = float(os.getenv("IG_PER_POST_COOLDOWN_S", "4.0"))
+# Seconds between opening one Instagram post and the next. 4s is faster than
+# a person reads a post, and post navigations are the main 429 trigger.
+IG_PER_POST_COOLDOWN_S = float(os.getenv("IG_PER_POST_COOLDOWN_S", "7.0"))
 
 # Cap IG posts-per-keyword lower than the global default, so each keyword is a
 # smaller burst. Set to 0 to use the requested max_posts unchanged.
